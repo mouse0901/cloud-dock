@@ -6,8 +6,9 @@ $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
 $version=(Get-Content -LiteralPath (Join-Path $root 'version.json') -Raw|ConvertFrom-Json).version
 $release=Join-Path 'H:\CodexOutputs\packages\cloud-dock' $version
-& (Join-Path $PSScriptRoot 'New-UpdateManifest.ps1') -Repository $Repository -Channel $Channel
-if($LASTEXITCODE -ne 0){throw '更新清单生成失败。'}
+$manifestResult=& (Join-Path $PSScriptRoot 'New-UpdateManifest.ps1') -Repository $Repository -Channel $Channel
+if(-not $?){throw '更新清单生成失败。'}
+$manifestResult
 $installer=Join-Path $release ('CloudDock-'+$version+'-Setup-x64.exe')
 $archive=Join-Path $release ('CloudDock-'+$version+'-Windows-x64.zip')
 $checksums=Join-Path $release 'CHECKSUMS.sha256'
