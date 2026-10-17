@@ -1,0 +1,13 @@
+{
+  "baidu": {
+    "source": "https://nd-static.bdstatic.com/m-static/wp-brand/favicon.ico",
+    "asset": "baidu-mark.svg",
+    "method": "Official product mark silhouette reconstructed as monochrome vector"
+  },
+  "quark": {
+    "source": "https://g.alicdn.com/quark-cloud-drive/quark-cloud-drive-static-page/0.1.78/4c6c007286bf1936786b.png",
+    "asset": "quark-mark.svg",
+    "method": "Official netdisk cloud and inner loop silhouette reconstructed as monochrome vector; not the purple Quark browser Q"
+  },
+  "notes": "These are reconstructed SVG outlines, not SVG files distributed by the brands. research/rejected-browser-quark.ico and research/rejected-browser-quark.png are rejected browser-Q research assets and not used by the design."
+}

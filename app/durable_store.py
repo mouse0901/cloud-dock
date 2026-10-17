@@ -1,0 +1,22 @@
+"""Local durable state contains stable identifiers only, never authentication tickets."""
+import json,sqlite3
+from pathlib import Path
+class DurableStore:
+    def __init__(self,path):
+        self.path=Path(path);self.path.parent.mkdir(parents=True,exist_ok=True)
+        self.db=sqlite3.connect(self.path)
+        self.db.execute('PRAGMA journal_mode=WAL');self.db.execute('PRAGMA synchronous=FULL')
+        self.db.execute('CREATE TABLE IF NOT EXISTS records(kind TEXT,id TEXT,payload TEXT,PRIMARY KEY(kind,id))')
+        self.db.execute("CREATE INDEX IF NOT EXISTS record_rule_state ON records(kind,json_extract(payload,'$.rule'),json_extract(payload,'$.state'))")
+        self.db.commit()
+    def put(self,kind,id,value):
+        with self.db:self.db.execute('INSERT OR REPLACE INTO records VALUES(?,?,?)',(kind,id,json.dumps(value,ensure_ascii=False)))
+    def get(self,kind,id):
+        row=self.db.execute('SELECT payload FROM records WHERE kind=? AND id=?',(kind,id)).fetchone()
+        return json.loads(row[0]) if row else None
+    def all(self,kind):return [json.loads(x[0]) for x in self.db.execute('SELECT payload FROM records WHERE kind=?',(kind,))]
+    def issues(self,rule):
+        return [json.loads(x[0]) for x in self.db.execute("SELECT payload FROM records WHERE kind='backup_file' AND json_extract(payload,'$.rule')=? AND json_extract(payload,'$.state')='excluded' LIMIT 50",(rule,))]
+    def remove(self,kind,id):
+        with self.db:self.db.execute('DELETE FROM records WHERE kind=? AND id=?',(kind,id))
+    def close(self):self.db.close()

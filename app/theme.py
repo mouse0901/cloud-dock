@@ -1,0 +1,2 @@
+LIGHT = dict(bg="#FFFFFF", rail="#F7F9FC", surface="#FFFFFF", soft="#F5F7FA", text="#1E293B", muted="#738198", line="#E8EDF4", accent="#2563EB", selected="#EAF1FF", purple="#8063D4", green="#2F9874", danger="#D85158", hover="#F2F6FC")
+DARK = dict(bg="#161B24", rail="#1B222E", surface="#202938", soft="#283344", text="#E9EEF7", muted="#9AA9BF", line="#303D50", accent="#78A4FF", selected="#283E66", purple="#B09AFF", green="#64C5A1", danger="#FF8B91", hover="#273447")

@@ -1,0 +1,1 @@
+{"schema":1,"product":"cloud-dock","channel":"beta","version":"9.9.9","published_at":"2026-10-17T00:00:00Z","notes":"测试更新","artifact":{"kind":"installer","architecture":"windows-x64","url":"https://github.com/example/cloud-dock-releases/releases/download/v9.9.9/CloudDock-9.9.9-Setup-x64.exe","size":12,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}

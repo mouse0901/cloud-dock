@@ -1,0 +1,36 @@
+# Personal state and credentials
+/data/
+/downloads/
+/installed-data.txt
+/import-pending
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.log
+
+# Generated runtimes, packages and build output
+/runtime/
+/work/
+/.venv/
+/CloudDock.exe
+/UpdateLauncher.exe
+/Microsoft.Web.WebView2.Core.dll
+/Microsoft.Web.WebView2.WinForms.dll
+/WebView2Loader.dll
+*.zip
+*.part
+
+# Python and editor caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store
+
+# Signing material must never enter source control
+*.pfx
+*.p12
+*private*.pem
+*private*.xml

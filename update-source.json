@@ -1,0 +1,19 @@
+{
+  "enabled": false,
+  "repository": "",
+  "channels": {
+    "stable": {
+      "manifest": "",
+      "signature": ""
+    },
+    "beta": {
+      "manifest": "",
+      "signature": ""
+    }
+  },
+  "public_key": {
+    "algorithm": "RS256",
+    "modulus": "1fiEiSYwkuzqqt3ydSR/iuglC45B5u8El2GWjXo6YWMDfZI9Bw8lBpxluVYqjcIZw58bnr67whVj1HraLRwokVLKFeeBSd0BrNb8zSqrhHn3qeM6fJcMh2CX4rEfgYFpYTMBFI4GXFXPc0ahOIdWiocJLGFARNsgtgXQzGYzvyG8EomHHYyQnLIqExNDMUAczCAFIyToL+gygTDnTXjFHOnoFbK0/dSlWjGw3cS+ITwXhQ/GcL6LcfGhQv+CWWJgDYhJSeWX9LpIxRokiKJEmoWN/T1CvQ4UD2FGZMOctqqQIq0gJlV7vuXpkt+il18HBSr0QAvp+/QDpL4encGuPx1mQ7lHjsrnwWRQflWLOOlAzdC7DXbodOHiE/elOImNB9bc/vjjWs/YGtcIYu0QIxx6l43EwNEGeAgbVbOtYmBsJbYryoVG9hAEEi+AMMiOkX0nSllgu2qpysJ3xp6hFRDarUvV1mO/hgOZgaGuy5NmaSMEf9/67qP2Ihl96v6Z",
+    "exponent": "AQAB"
+  }
+}
