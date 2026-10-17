@@ -23,6 +23,10 @@ class BaiduWebPanel(RememberLoginMixin, LiveBrowserMixin, LiveDownloadMixin, Bai
         self.init_remember_login("baidu", client, session_store)
         super().__init__(page,on_session_change,client)
         self.api = BaiduWebApi(self.client, diagnostic)
+        from app.parallel_download import DownloadGate
+        self.download_connections = 1
+        self._range_disabled_generation = None
+        self.download_gate = DownloadGate(4)
         self.download_available = True
         self.init_live_downloads()
         self.directory_title = "我的百度网盘"
@@ -32,6 +36,16 @@ class BaiduWebPanel(RememberLoginMixin, LiveBrowserMixin, LiveDownloadMixin, Bai
         self.begin_button.content = "获取二维码"
         self.cancel_button.content = "退出登录"
         self.status.value = "使用百度网盘 App 扫码，连接自己的账号。"
+
+    def make_download(self, item, destination, client, resolver, validate, progress, **kwargs):
+        from app.baidu_adaptive_download import BaiduAdaptiveDownload
+        policy=getattr(self,'download_policy',None)
+        connections=policy() if policy else self.download_connections
+        generation=self.generation
+        return BaiduAdaptiveDownload(item, destination, client, resolver, validate, progress,
+            connections=connections, gate=self.download_gate,
+            allow_parallel=lambda:self._range_disabled_generation!=generation,
+            on_fallback=lambda:setattr(self,'_range_disabled_generation',generation), **kwargs)
 
     @staticmethod
     def record_diagnostic(event):
@@ -133,17 +147,8 @@ class BaiduWebPanel(RememberLoginMixin, LiveBrowserMixin, LiveDownloadMixin, Bai
                 self.status_message("已登录，目录读取超时，请点击“重新读取”重试", "#C05020")
         if self.closed or generation != self.generation:
             return
-        # Membership is optional display information and cannot invalidate login.
-        try:
-            async with asyncio.timeout(8):
-                label = await self.api.account_label()
-            if not self.closed and generation == self.generation:
-                self.account_text.value = label
-                self.update()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            pass
+        # Capacity/membership are refreshed separately by the desktop service.
+        # Do not delay login or expose subscription information in the UI.
 
     async def retry_connection(self,e=None):
         async with self.action_lock:

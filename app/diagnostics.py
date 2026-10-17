@@ -3,7 +3,7 @@ from collections import Counter
 import datetime,platform
 SAFE_STATES={'queued','paused','completed','cancelled','failed','downloading','uploading','preparing','verifying','committing','running','done'}
 def report(bridge):
-    result={'product':'Cloud Dock','version':'0.6.2','schema':1,'created_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    result={'product':'Cloud Dock','version':'0.6.3','schema':1,'created_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),
             'runtime':{'python':platform.python_version(),'system':platform.system(),'release':platform.release(),'machine':platform.machine()},
             'workspace':{'initializing':bool(bridge.deferred),'initialization_failed':bool(bridge.initialization_error)},
             'accounts':{name:{'connected':bool(p.api.authenticated),'busy':bool(p.browser_busy)} for name,p in bridge.panels.items() if name in ('baidu','quark')},

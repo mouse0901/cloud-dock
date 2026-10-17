@@ -117,7 +117,7 @@ class LiveWorkspaceTests(unittest.IsolatedAsyncioTestCase):
         await panel.download_browser_selection()
         self.assertEqual(len(panel.jobs),3)
         self.assertEqual([job.destination for job in panel.jobs],original)
-        self.assertEqual(panel.download_destination.parent.parent,self.root/'other')
+        self.assertEqual(panel.download_destination.parent,self.root/'other')
 
     async def test_saved_only_startup_with_no_session_does_not_start_qr(self):
         for provider in ('baidu','quark'):

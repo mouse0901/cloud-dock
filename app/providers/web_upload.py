@@ -57,6 +57,11 @@ class UploadAdapter:
         raise UploadError('upload_directory','目录过大，暂不能完成重名检查。')
     async def preflight(self,job):
         if not self.api.authenticated:raise UploadError('upload_account','请先登录对应网盘。')
+        check=getattr(self.api,'capacity_check',None)
+        if check:
+            from app.cloud_operations import CloudOperationError
+            try:check(job.total)
+            except CloudOperationError as error:raise UploadError('upload_capacity',str(error)) from None
         if await self.lookup(job):raise UploadError('upload_conflict','目标目录已有同名项目；未覆盖，请重命名本地文件后上传。')
     async def verify(self,job):
         for attempt in range(4):
@@ -64,6 +69,8 @@ class UploadAdapter:
             if item and job.remote_id is not None and item.id != job.remote_id:
                 raise UploadError('upload_verify','目标目录的文件标识发生变化，上传结果待核对。')
             if item and not item.is_dir and item.size==job.total:
+                changed=getattr(self.api,'capacity_changed',None)
+                if changed:changed()
                 return item
             if item:raise UploadError('upload_verify','目标目录的文件大小与本地不同，上传结果待核对。')
             if attempt<3:await asyncio.sleep(.5*(attempt+1))

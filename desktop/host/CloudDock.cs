@@ -80,7 +80,7 @@ class CloudWindow:Form {
     public CloudWindow(string folder,bool startup=false){
         startupLaunch=startup;startupRegistration=new StartupRegistration(Path.Combine(folder,"CloudDock.exe"));
         root=folder;url=Environment.GetEnvironmentVariable("CLOUD_DOCK_URL");nativeKey=Environment.GetEnvironmentVariable("CLOUD_DOCK_NATIVE_KEY");
-        Text="云屿 Cloud Dock · 0.6.2";ClientSize=new Size(1180,760);MinimumSize=new Size(980,680);StartPosition=FormStartPosition.CenterScreen;
+        Text="云屿 Cloud Dock · 0.6.3";ClientSize=new Size(1180,760);MinimumSize=new Size(980,680);StartPosition=FormStartPosition.CenterScreen;
         Icon=new Icon(Path.Combine(root,"assets","branding","cloud-dock.ico"));
         ReadPreferences();
         if(startupLaunch){WindowState=FormWindowState.Minimized;ShowInTaskbar=false;}
@@ -387,7 +387,7 @@ class CloudWindow:Form {
             if(!String.IsNullOrEmpty(url))await Task.WhenAny(Post("api/action",new {action="shutdown"}),Task.Delay(8000));
             if(backend!=null && !backend.HasExited)await Task.WhenAny(Task.Run(()=>backend.WaitForExit()),Task.Delay(8000));
         }catch{}
-        if(backend!=null && !backend.HasExited){closing=false;closeToTray=true;Text="云屿 Cloud Dock · 0.6.2";RestoreWindow(false);MessageBox.Show(this,"后台仍在保存或核对任务。请稍后再次退出；安装程序不会替换正在使用的文件。","云屿");return;}
+        if(backend!=null && !backend.HasExited){closing=false;closeToTray=true;Text="云屿 Cloud Dock · 0.6.3";RestoreWindow(false);MessageBox.Show(this,"后台仍在保存或核对任务。请稍后再次退出；安装程序不会替换正在使用的文件。","云屿");return;}
         done=true;tray.Visible=false;Timing("exit_saved");Close();
     }
     async Task RunQa(){
@@ -404,19 +404,23 @@ class CloudWindow:Form {
         }
         await Task.Delay(800);
         Timing("qa_capture_start");
-        if(!String.IsNullOrEmpty(capture))using(var file=File.Create(capture))
+        await Task.Delay(250);
+            if(!String.IsNullOrEmpty(capture))using(var file=File.Create(capture))
             await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,file);
         if(!String.IsNullOrEmpty(lifecycle)){
             await EnsureService();
             var results=new Dictionary<string,object>();results["default_close_to_tray"]=closeToTray;
             await view.CoreWebView2.ExecuteScriptAsync("changeView('backups');");await Task.Delay(200);
             results["sync_center"]=await view.CoreWebView2.ExecuteScriptAsync("Boolean(document.querySelector('#newSync') && document.querySelector('[data-new-kind=\"file\"]'))")=="true";
+            await Task.Delay(250);
             if(!String.IsNullOrEmpty(capture))using(var file=File.Create(capture+".sync.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,file);
             await view.CoreWebView2.ExecuteScriptAsync("newSync('file');");await Task.Delay(200);
             results["sync_file_wizard"]=await view.CoreWebView2.ExecuteScriptAsync("Boolean(document.querySelector('#syncRemoteName') && document.querySelector('#syncKind').value==='file' && document.querySelector('#syncMode').options.length===3)")=="true";
             results["sync_preview_button_visible"]=await view.CoreWebView2.ExecuteScriptAsync("(()=>{const b=document.querySelector('#syncPreview').getBoundingClientRect();return b.bottom<innerHeight && b.top>0;})()")=="true";
+            await Task.Delay(250);
             if(!String.IsNullOrEmpty(capture))using(var file=File.Create(capture+".wizard.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,file);
             await view.CoreWebView2.ExecuteScriptAsync("document.querySelector('#sheet').close();document.body.classList.add('dark');");await Task.Delay(200);
+            await Task.Delay(250);
             if(!String.IsNullOrEmpty(capture))using(var file=File.Create(capture+".dark.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,file);
             await view.CoreWebView2.ExecuteScriptAsync("document.body.classList.remove('dark');");
             Send(new {type="qaBridgeProbe"});var probe=Stopwatch.StartNew();while(qaBridgeReply==null&&probe.ElapsedMilliseconds<6000)await Task.Delay(50);
@@ -424,21 +428,25 @@ class CloudWindow:Form {
             results["browser_picker_route_blocked"]=qaBridgeReply!=null && Bool(qaBridgeReply,"pickerBlocked",false);
             Send(new {type="clipboardShare",provider="quark",url="https://pan.quark.cn/s/012345abcdef?pwd=Ab12",password="Ab12"});await Task.Delay(200);
             results["clipboard_prompt"]=await view.CoreWebView2.ExecuteScriptAsync("Boolean(document.querySelector('.clipboard-share:not([hidden])'))")=="true";
+            await Task.Delay(250);
             if(!String.IsNullOrEmpty(capture))using(var file=File.Create(capture+".clipboard.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,file);
             results["clipboard_form_prefilled"]=await view.CoreWebView2.ExecuteScriptAsync("(()=>{document.querySelector('.clipboard-share .primary').click();return document.querySelector('#shareInput').value==='https://pan.quark.cn/s/012345abcdef?pwd=Ab12' && document.querySelector('#sharePassword').value==='Ab12';})()")=="true";
             await view.CoreWebView2.ExecuteScriptAsync("document.querySelector('#sheet').close();settings();document.querySelector('#clipboardSwitch').click();");await Task.Delay(500);
             results["release_controls"]=await view.CoreWebView2.ExecuteScriptAsync("Boolean(document.querySelector('#releaseNotes')&&document.querySelector('#exportDiagnostics'))")=="true";
             var diagnostic=await Post("api/action",new {action="diagnostics"});var diagnosticReport=(Dictionary<string,object>)diagnostic["report"];
-            results["diagnostics_allowlist"]=Convert.ToString(diagnosticReport["version"])=="0.6.2"&&!json.Serialize(diagnostic).Contains("download_dir");
+            results["diagnostics_allowlist"]=Convert.ToString(diagnosticReport["version"])=="0.6.3"&&!json.Serialize(diagnostic).Contains("download_dir");
             results["startup_setting"]=await view.CoreWebView2.ExecuteScriptAsync("Boolean(document.querySelector('#startupSwitch') && !document.querySelector('#startupSwitch').disabled)")=="true";
             results["clipboard_setting_off"]=await view.CoreWebView2.ExecuteScriptAsync("Boolean(live.clipboard_links===false && document.querySelector('#clipboardSwitch').getAttribute('aria-checked')==='false')")=="true";
             await view.CoreWebView2.ExecuteScriptAsync("document.querySelector('#clipboardSwitch').click();");await Task.Delay(500);
             results["clipboard_setting_on"]=await view.CoreWebView2.ExecuteScriptAsync("Boolean(live.clipboard_links===true && document.querySelector('#clipboardSwitch').getAttribute('aria-checked')==='true')")=="true";
+            await Task.Delay(250);
             if(!String.IsNullOrEmpty(capture))using(var file=File.Create(capture+".settings.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,file);
             await view.CoreWebView2.ExecuteScriptAsync("document.querySelector('#exportDiagnostics').scrollIntoView({block:'center'});");await Task.Delay(100);
+            await Task.Delay(250);
             if(!String.IsNullOrEmpty(capture))using(var file=File.Create(capture+".release.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,file);
             await view.CoreWebView2.ExecuteScriptAsync("historySheet({id:'qa-preview-only',enabled:true});");await Task.Delay(100);
             results["history_paused_guard"]=await view.CoreWebView2.ExecuteScriptAsync("Boolean(document.querySelector('#historyPreview').disabled && document.querySelector('#historyKeep').value==='5')")=="true";
+            await Task.Delay(250);
             if(!String.IsNullOrEmpty(capture))using(var file=File.Create(capture+".history.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,file);
             await view.CoreWebView2.ExecuteScriptAsync("document.querySelector('#sheet').close();");
             Close();await Task.Delay(150);results["close_hides_window"]=!Visible && !closing && tray.Visible;
@@ -452,6 +460,28 @@ class CloudWindow:Form {
             await Post("api/action",new {action="desktop_preferences",close_to_tray=false});
             var prefs=json.Deserialize<Dictionary<string,object>>(File.ReadAllText(Path.Combine(Program.Data,"preferences.json")));
             results["tray_setting_persisted"]=!Bool(prefs,"close_to_tray",true);
+            // UI fixtures stay inside the opt-in QA process with an isolated profile.
+            await view.CoreWebView2.ExecuteScriptAsync("refreshState=async()=>{}; api=async()=>({}); live.providers.baidu={...live.providers.baidu,connected:true,busy:false,path:'/工作文件',context:'qa',files:[]}; live.capacities={baidu:{state:'ready',total:1e12,used:4e11,free:6e11,checked:1},quark:{state:'disconnected'}}; data.baidu['/工作文件']=[{id:'qa-dir',name:'项目资料',path:'/工作文件/项目资料',type:'folder',size:0,date:'2026-10-17'},{id:'qa-file',name:'设计说明.pdf',path:'/工作文件/设计说明.pdf',type:'pdf',size:354000,date:'2026-10-16'}];localGo('baidu','/工作文件');updateLiveControls();");
+            results["capacity_visible"]=await view.CoreWebView2.ExecuteScriptAsync("document.querySelector('[data-capacity=baidu]').textContent.includes('600.0 GB')")=="true";
+            results["breadcrumbs_at_top"]=await view.CoreWebView2.ExecuteScriptAsync("Boolean(document.querySelector('.toolbar #breadcrumbs'))")=="true";
+            await view.CoreWebView2.ExecuteScriptAsync("document.querySelector('#selectAll').click();");
+            results["folders_selectable"]=await view.CoreWebView2.ExecuteScriptAsync("state.selected.size===2 && document.querySelectorAll('.row-check:checked').length===2 && !document.querySelector('#download').disabled")=="true";
+            await view.CoreWebView2.ExecuteScriptAsync("document.querySelector('#clearSelection').click();document.querySelector('[data-sort-field=date]').click();document.querySelector('[data-sort-field=date]').click();");
+            results["date_sort_reversible"]=await view.CoreWebView2.ExecuteScriptAsync("state.sort==='date' && state.sortDesc===true")=="true";
+            await Task.Delay(250);
+            if(!String.IsNullOrEmpty(capture))using(var file=File.Create(capture+".files.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,file);
+            await view.CoreWebView2.ExecuteScriptAsync("live.tasks=[{id:'qa-task',provider:'baidu',name:'项目资料.zip',direction:'download',status:'completed',total:36e6,done:36e6,speed:0,target:'H:/Downloads/项目资料.zip'},{id:'qa-retry',provider:'baidu',name:'待处理.pdf',direction:'download',status:'failed',total:600000,done:0,speed:0,error:'连接中断，请重试'}];changeView('transfers');document.querySelector('[data-transfer-filter=completed]').click();");
+            results["completed_tasks_compact"]=await view.CoreWebView2.ExecuteScriptAsync("document.querySelectorAll('.task').length===1 && !document.querySelector('.task .task-progress')")=="true";
+            await Task.Delay(250);
+            if(!String.IsNullOrEmpty(capture))using(var file=File.Create(capture+".transfers.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,file);
+            await view.CoreWebView2.ExecuteScriptAsync("settings();document.querySelector('[data-settings-tab=storage]').click();");
+            results["settings_categories"]=await view.CoreWebView2.ExecuteScriptAsync("document.querySelectorAll('.settings-nav button').length===5 && !document.querySelector('[data-settings-panel=storage]').hidden && document.querySelector('[data-settings-panel=general]').hidden")=="true";
+            await Task.Delay(250);
+            if(!String.IsNullOrEmpty(capture))using(var file=File.Create(capture+".storage.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,file);
+            await view.CoreWebView2.ExecuteScriptAsync("document.querySelector('#sheet').close();document.querySelector('[data-capacity=baidu]').click();");
+            results["membership_hidden"]=await view.CoreWebView2.ExecuteScriptAsync("!document.body.innerText.includes('VIP') && Boolean(document.querySelector('#capacityDetail'))")=="true";
+            await Task.Delay(250);
+            if(!String.IsNullOrEmpty(capture))using(var file=File.Create(capture+".capacity.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,file);
             File.WriteAllText(lifecycle,json.Serialize(results));
         }
         RequestExit();

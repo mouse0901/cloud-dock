@@ -15,6 +15,7 @@ from app.domain import CloudFile
 
 class UiError(Exception):pass
 class Page:
+    desktop_only=True
     def __init__(self):self.revision=0
     def update(self):self.revision+=1
     def show_dialog(self,*args):self.update()
@@ -25,6 +26,8 @@ class Bridge:
         self.panels=panels if panels is not None else ({} if defer else self.create_panels())
         self.deferred=defer;self.features=None;self.updates=None;self.update_start=None;self.initializing=None;self.initialization_error='';self.closing=False
         self.stop=asyncio.Event();self.selections={};self.startups=[]
+        from desktop.experience import Experience
+        self.experience=Experience(self)
         for p in self.panels.values():p.set_download_root(self.workspace.settings['download_dir'])
     def create_panels(self):
         # Import the former Flet controllers off the first-response path.
@@ -59,6 +62,7 @@ class Bridge:
         if self.initializing:await asyncio.gather(self.initializing,return_exceptions=True)
         if self.update_start:self.update_start.cancel();await asyncio.gather(self.update_start,return_exceptions=True)
         if self.updates:await self.updates.close()
+        await self.experience.close()
         if self.features:await self.features.close()
         for t in self.startups:t.cancel()
         await asyncio.gather(*self.startups,return_exceptions=True)
@@ -78,7 +82,8 @@ class Bridge:
                     'direction':getattr(j,'direction','download'),'status':j.state,'done':j.done,'total':j.total,
                     'speed':j.speed,'error':j.error,'warning':getattr(j,'warning',''),
                     'restart':j.requires_restart,'committed':getattr(j,'commit_started',False),
-                    'target':str(getattr(j,'target','') or ''),'connections':getattr(j,'active_connections',0)})
+                    'target':str(getattr(j,'target','') or ''),'connections':getattr(j,'active_connections',0),
+                    'group':getattr(j,'_download_group','')})
         return rows+(self.features.archived() if self.features else [])
     async def snapshot(self):
         providers={}
@@ -102,8 +107,10 @@ class Bridge:
                 'close_to_tray':self.workspace.settings.get('close_to_tray',True),
                 'clipboard_links':self.workspace.settings.get('clipboard_links',True),
                 'providers':providers,'tasks':self.tasks(),'download_dir':self.workspace.settings['download_dir'],
-                'update':self.updates.snapshot() if self.updates else {'status':'initializing','current':'0.6.2','enabled':False},
-                'version':'0.6.2','migration_notice':(self.workspace.data_dir/'migration.json').exists(),'theme':self.workspace.settings.get('theme','light'),'reduced':self.workspace.settings.get('reduce_motion',False)}
+                'favorites':self.experience.favorites() if self.features else [],
+                'file_view':{k:self.workspace.settings.get(k,v) for k,v in {'view':'list','sort_field':'name','sort_desc':False}.items()},
+                'update':self.updates.snapshot() if self.updates else {'status':'initializing','current':'0.6.3','enabled':False},
+                'version':'0.6.3','migration_notice':(self.workspace.data_dir/'migration.json').exists(),'theme':self.workspace.settings.get('theme','light'),'reduced':self.workspace.settings.get('reduce_motion',False)}
     def selected_paths(self,key,kind):
         value=self.selections.pop(key,None)
         if not value or time.monotonic()-value['at']>300 or value['kind']!=kind:raise UiError('文件选择已过期，请重新选择。')
@@ -115,6 +122,17 @@ class Bridge:
         key=secrets.token_hex(24);self.selections[key]={'kind':kind,'paths':paths,'at':time.monotonic()};return {'selection':key,'count':len(paths)}
     async def action(self,d):
         action=d.get('action')
+        if action=='file_view':
+            if d.get('view') in ('list','grid'):self.workspace.settings['view']=d['view']
+            if d.get('sort_field') in ('name','size','date'):self.workspace.settings['sort_field']=d['sort_field']
+            if type(d.get('sort_desc')) is bool:self.workspace.settings['sort_desc']=d['sort_desc']
+            await self.workspace.save();return {}
+        if action in ('capacity_refresh','favorite_toggle','history_clear','folder_preview','folder_status','folder_cancel','folder_confirm'):
+            from app.cloud_operations import CloudOperationError
+            if not self.features:raise UiError('工作空间正在准备，请稍后重试。')
+            try:return await self.experience.action(d)
+            except (CloudOperationError,OSError) as error:
+                raise UiError(str(error) if isinstance(error,CloudOperationError) else '本地目录不可用，请检查下载位置。') from None
         if action=='diagnostics':
             from app.diagnostics import report
             return {'report':report(self)}
@@ -189,7 +207,17 @@ class Bridge:
             if not isinstance(ids,list) or len(ids)>50:raise UiError('请选择当前页的文件。')
             items=[f for f in p.browser_rows if f.id in ids and not f.is_dir]
             if len(items)!=len(set(ids)):raise UiError('文件列表已变化，请重新选择。')
-            for f in items:await p.start_download(f)
+            if self.features:
+                from desktop.experience import local_parent
+                from app.cloud_operations import CloudOperationError
+                destination=local_parent(p.download_destination,p.path)
+                try:
+                    self.experience.check_disk(destination,sum(f.size for f in items))
+                    self.experience.safe_directory(destination,p.download_destination)
+                except CloudOperationError as error:raise UiError(str(error)) from None
+                for f in items:await p.start_download(f,destination=destination)
+            else:
+                for f in items:await p.start_download(f)
         elif action=='upload':
             paths=self.selected_paths(d.get('selection'),'files')
             if not p.upload_allowed():raise UiError('请打开本人网盘目录后上传。')
@@ -243,7 +271,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(200,data,kind)
         if path=='health':return self.respond(200,{'ok':True})
         if path=='cloud-dock.ico':return self.respond(200,(ROOT/'assets/branding/cloud-dock.ico').read_bytes(),'image/x-icon')
-        allowed={'':'index.html','index.html':'index.html','app.js':'app.js','prototype.css':'prototype.css','desktop.css':'desktop.css','theme-reveal.js':'theme-reveal.js','theme-reveal.css':'theme-reveal.css','cloud-dock.png':'cloud-dock.png','features.js':'features.js','features.css':'features.css','lifecycle.js':'lifecycle.js','clipboard.js':'clipboard.js','sync.js':'sync.js','sync.css':'sync.css','startup.js':'startup.js','update.js':'update.js','update.css':'update.css'}
+        allowed={'':'index.html','index.html':'index.html','app.js':'app.js','prototype.css':'prototype.css','desktop.css':'desktop.css','theme-reveal.js':'theme-reveal.js','theme-reveal.css':'theme-reveal.css','cloud-dock.png':'cloud-dock.png','features.js':'features.js','features.css':'features.css','lifecycle.js':'lifecycle.js','clipboard.js':'clipboard.js','sync.js':'sync.js','sync.css':'sync.css','startup.js':'startup.js','update.js':'update.js','update.css':'update.css','experience.js':'experience.js','experience.css':'experience.css'}
         if path not in allowed:return self.respond(404,{'error':'Not found'})
         file=ROOT/'desktop/web'/allowed[path]
         qa=os.environ.get('CLOUD_DOCK_QA_TIMINGS')

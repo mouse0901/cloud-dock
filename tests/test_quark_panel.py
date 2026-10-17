@@ -77,7 +77,7 @@ class QuarkPanelTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(panel.share_open.disabled)
         self.assertIsNone(panel.qr.content)
         self.assertIn("登录成功", panel.status.value)
-        self.assertEqual(panel.download_destination.parent.name, "quark")
+        self.assertEqual(panel.download_destination.name, "夸克网盘")
         self.assertEqual(len(calls), 4)
 
     async def test_failed_directory_can_retry_same_approved_session(self):

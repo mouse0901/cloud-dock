@@ -17,12 +17,12 @@
   soundButton.id='completionSound';soundButton.className='switch';soundButton.setAttribute('role','switch');soundButton.setAttribute('aria-label','传输完成提示音');
   function updateSound(){soundButton.classList.toggle('on',soundEnabled);soundButton.setAttribute('aria-checked',String(soundEnabled));}updateSound();sound.replaceWith(soundButton);
   soundButton.onclick=async()=>{soundButton.disabled=true;try{await api('sound',{value:!soundEnabled});soundEnabled=!soundEnabled;updateSound();}catch(e){report(e);}finally{soundButton.disabled=false;}};
-  const release=document.createElement('div');release.className='setting-line';release.innerHTML='<span>关于云屿<small>0.6.2 · 更新测试版</small></span><button class="quiet" id="releaseNotes">更新说明</button>';body.append(release);
-  $('#releaseNotes').onclick=()=>sheet('云屿 0.6.2', '<p>新增经过签名验证的软件更新：后台检查、断点下载、任务结束后安装，以及失败重启保护。</p><p>更新检查不会阻塞启动；断网时保留现有程序和已下载分片。安装版可以自动更新，便携版仍需手动使用安装包升级。</p><p>本版先进入测试通道，实际发布地址将在 GitHub 发布仓库建立后启用。</p>');
+  const release=document.createElement('div');release.className='setting-line';release.innerHTML='<span>关于云屿<small>0.6.3 · 更新测试版</small></span><button class="quiet" id="releaseNotes">更新说明</button>';body.append(release);
+  $('#releaseNotes').onclick=()=>sheet('云屿 0.6.3', '<p>新增网盘剩余空间、常用位置、文件夹下载预览。路径导航移到顶部，支持名称、大小和日期排序并记住视图。</p><p>传输页按状态分类，设置采用分类导航。百度下载尝试低并发分片，并保留不支持分片时的单连接回退。</p><p>本版为本地验证版本，尚未发布到更新通道。</p>');
   const diagnostics=document.createElement('div');diagnostics.className='setting-line';diagnostics.innerHTML='<span>诊断报告<small>只导出版本与状态统计，不含凭证、文件名和路径。</small></span><button class="quiet" id="exportDiagnostics">导出诊断…</button>';body.append(diagnostics);
   $('#exportDiagnostics').disabled=!native;$('#exportDiagnostics').onclick=()=>native.postMessage({type:'exportDiagnostics'});
   if(live?.migration_notice){const note=document.createElement('p');note.className='sync-callout';note.textContent='已从便携版导入数据。自动任务已暂停，请在同步与备份中核对位置后继续；原便携版仍保留，请使用安装版入口。';body.append(note);}
-  const about=document.createElement('p');about.className='setting-about';about.textContent='云屿 0.6.2 · 文件夹 / 单文件同步、版本备份、真实传输与签名更新。关闭到托盘后继续运行；退出后停止。登录会话仅加密保存在本机。';body.append(about);if(exit)body.append(exit);
+  const about=document.createElement('p');about.className='setting-about';about.textContent='云屿 0.6.3 · 文件夹 / 单文件同步、版本备份、真实传输与签名更新。关闭到托盘后继续运行；退出后停止。登录会话仅加密保存在本机。';body.append(about);if(exit)body.append(exit);
   $('#startupSwitch').onclick=()=>{const b=$('#startupSwitch');b.disabled=true;native?.postMessage({type:'setStartup',enabled:!startupState?.registered});};
   updateStartup();native?.postMessage({type:'startupStatus'});
  };$('#settings').onclick=settings;

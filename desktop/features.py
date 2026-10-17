@@ -15,6 +15,14 @@ class Features:
     def __init__(self,bridge):
         self.bridge=bridge;self.store=DurableStore(bridge.workspace.data_dir/'activity.sqlite3')
         self.ops={name:CloudOperations(name,p.api) for name,p in bridge.panels.items()}
+        from app.account_status import AccountStatus
+        self.account_status=AccountStatus(self.ops)
+        from app.baidu_adaptive_download import account_connections
+        if 'baidu' in bridge.panels:
+            bridge.panels['baidu'].download_policy=lambda:account_connections(self.account_status.internal_membership('baidu'))
+        for name,ops in self.ops.items():
+            ops.api.capacity_check=lambda size,name=name:self.account_status.check_upload(name,size)
+            ops.api.capacity_changed=lambda name=name:self.account_status.invalidate(name)
         self.backup=FolderBackup(self.store,self.ops)
         self.sync=SyncEngine(self.store,self.ops)
         from app.history_manager import HistoryManager
@@ -42,20 +50,22 @@ class Features:
             key=j._desktop_id;upload=getattr(j,'direction','download')=='upload'
             row={'id':key,'account':account,'provider':name,'name':j.item.name,'path':j.item.path,'item':{k:v for k,v in asdict(j.item).items() if k!='thumbnail'},
                  'direction':'upload' if upload else 'download','status':j.state,'done':j.done,'total':j.total,'speed':0,'error':j.error,'warning':getattr(j,'warning',''),
-                 'restart':j.requires_restart,'committed':getattr(j,'commit_started',False),'target':str(getattr(j,'target','') or ''),'connections':0}
+                 'restart':j.requires_restart,'committed':getattr(j,'commit_started',False),'target':str(getattr(j,'target','') or ''),'connections':0,'group':getattr(j,'_download_group','')}
             if upload:row.update(local=str(j.local),fingerprint=asdict(j.fingerprint),directory=j.directory,remote_id=j.remote_id)
             else:row['destination']=str(j.destination)
             marker=(j.state,j.done//(1024*1024),getattr(j,'commit_started',False),getattr(j,'remote_id',None))
             old_marker=self.last_write.get(key)
             if old_marker!=marker and (old_marker is None or old_marker[0]!=marker[0] or old_marker[2:]!=marker[2:] or time.monotonic()-self.last_write_time.get(key,0)>=2):
                 self.store.put('transfer',key,row);self.last_write[key]=marker;self.last_write_time[key]=time.monotonic()
-            if j.state=='completed' and key not in self.seen_completed:self.seen_completed.add(key);self.completed_pending=True
+            if j.state=='completed' and key not in self.seen_completed:
+                self.seen_completed.add(key);self.completed_pending=True
+                if upload:self.account_status.invalidate(name)
     def archived(self):
         active={getattr(j,'_desktop_id',None) for p in self.bridge.panels.values() for j in [*p.jobs,*p.upload_jobs]}
         result=[]
         for row in self.store.all('transfer'):
             if row['id'] in active:continue
-            public={k:v for k,v in row.items() if k in {'id','provider','name','path','direction','status','done','total','speed','error','warning','restart','committed','target','connections'}}
+            public={k:v for k,v in row.items() if k in {'id','provider','name','path','direction','status','done','total','speed','error','warning','restart','committed','target','connections','group'}}
             public['archived']=True
             if row['status'] not in ('completed','cancelled'):
                 public.update(status='paused',error='已保留任务，重新连接原账号后可'+('重新下载。' if row['direction']=='download' else '核对后继续上传。'),restart=False)
@@ -73,7 +83,8 @@ class Features:
                 self.sound_sequence+=1;self.completed_pending=False
             await asyncio.sleep(2)
     def snapshot(self):
-        return {'sync_rules':[{**r,'issue_count':len(self.sync.entries('sync_issue',r['id'])),'pending_count':len(self.sync.entries('sync_pending',r['id'])),'active':self.sync.active.get(r['id'])} for r in self.sync.rules()],
+        return {'capacities':{name:self.account_status.public(name) for name in self.ops},
+                'sync_rules':[{**r,'issue_count':len(self.sync.entries('sync_issue',r['id'])),'pending_count':len(self.sync.entries('sync_pending',r['id'])),'active':self.sync.active.get(r['id'])} for r in self.sync.rules()],
                 'backups':[{**r,'issues':[{'path':x['id'].split(':',1)[-1],'message':x.get('error','需核对')} for x in self.store.issues(r['id'])][:50],'active':self.backup.running.get(r['id'])} for r in self.backup.rules()],
                 'sound_sequence':self.sound_sequence,'sound':self.bridge.workspace.settings.get('completion_sound',True)}
     def thumbnail_key(self,name,item):
@@ -147,6 +158,7 @@ class Features:
             row=next((x for x in stored[4] if x['id']==d.get('id')),None)
             if row is None:raise CloudOperationError('请选择已列出的文件。')
             async with ops.lock:await ops.restore(row)
+            self.account_status.invalidate(name)
             return {}
         if getattr(p,'share',None) is not None:raise CloudOperationError('请先返回本人网盘。')
         if action in ('delete_preview','backup_preview') and d.get('context')!=self.bridge.context(p):raise CloudOperationError('当前目录已变化，请重新操作。')
@@ -162,6 +174,7 @@ class Features:
             async with ops.lock:
                 self.backup.suppress(name,account,row)
                 await ops.delete(row)
+            self.account_status.invalidate(name)
             await p.load_directory(p.path,p.page_index);return {}
         if action=='backup_preview':
             local=self.bridge.selected_paths(d.get('selection'),'directory')[0]
@@ -213,5 +226,6 @@ class Features:
         if self.loop_task:self.loop_task.cancel();await asyncio.gather(self.loop_task,return_exceptions=True)
         await self.sync.close()
         await self.backup.close()
+        await self.account_status.close()
         for name in self.ops:self.capture(name,force=True)
         self.store.close()

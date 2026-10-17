@@ -25,13 +25,13 @@ class LiveDownloadMixin:
         self._live_host = ft.Column(spacing=10)
 
     def new_download_destination(self,provider):
-        return self.download_root / provider / uuid4().hex[:12]
+        return self.download_root / {'baidu':'百度网盘','quark':'夸克网盘'}.get(provider,provider)
 
     def set_download_root(self,path):
         self.download_root = Path(path)
         if self.download_destination is not None:
             # Already queued jobs keep their own destination unchanged.
-            self.download_destination = self.download_root / self.session_provider / self.download_destination.name
+            self.download_destination = self.new_download_destination(self.session_provider)
 
     async def open_completed_folder(self,job,e=None):
         if job not in self.jobs or job.state != 'completed' or job.target is None:
@@ -65,7 +65,8 @@ class LiveDownloadMixin:
     def _downloads_changed(self):
         if not hasattr(self, 'jobs') or self.closed:
             return
-        self._live_host.controls = self.render_live_downloads().controls
+        if not getattr(self.page,'desktop_only',False):
+            self._live_host.controls = self.render_live_downloads().controls
         self.update()
         callback = getattr(self, 'on_transfer_change', None)
         if callback:
@@ -80,7 +81,7 @@ class LiveDownloadMixin:
     def make_download(self, item, destination, client, resolver, validate, progress, **kwargs):
         return DirectDownload(item, destination, client, resolver, validate, progress, **kwargs)
 
-    async def start_download(self, item, e=None):
+    async def start_download(self, item, e=None, *, destination=None, group='', notify=True):
         if self.closed or self._downloads_stopping or self.reader is None:
             return
         if item.is_dir:
@@ -121,14 +122,18 @@ class LiveDownloadMixin:
             if current_owner() == owner and job in self.jobs:
                 self._downloads_changed()
 
-        job = self.make_download(item, self.download_destination, api.client,
+        destination = Path(destination) if destination is not None else self.download_destination
+        job = self.make_download(item, destination, api.client,
                              bound_resolver, api.validate_download_url, progress,
                              owner=owner, current_owner=current_owner)
         job._share_download=bool(getattr(self, "share", None))
+        job._download_group=group
         self.jobs.append(job)
-        self.download_status.value = '已加入真实下载队列，文件保存在：' + str(self.download_destination)
-        self._downloads_changed()
-        self._ensure_live_worker()
+        self.download_status.value = '已加入真实下载队列，文件保存在：' + str(destination)
+        if notify:
+            self._downloads_changed()
+            self._ensure_live_worker()
+        return job
 
     async def _run_queued(self, job):
         if job.state == 'queued':

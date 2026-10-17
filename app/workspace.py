@@ -11,7 +11,7 @@ from app.providers.demo import atomic_json
 class Workspace:
     def __init__(self, data_dir: Path):
         self.data_dir = data_dir
-        self.settings = {"theme": "light", "view": "list", "concurrency": 3,
+        self.settings = {"theme": "light", "view": "list", "sort_field":"name", "sort_desc":False, "concurrency": 3,
                          "download_dir": str((data_dir / "downloads" if (data_dir.parent / "installed-data.txt").exists() or __import__("os").environ.get("CLOUD_DOCK_DATA_DIR") else data_dir.parent / "downloads").resolve()), "reduce_motion": False,
                          "close_to_tray": True, "clipboard_links": True,
                          "update_auto_check": True, "update_auto_download": False,
@@ -38,6 +38,8 @@ class Workspace:
                 self.settings["theme"] = saved["theme"]
             if saved.get("view") in {"list", "grid"}:
                 self.settings["view"] = saved["view"]
+            if saved.get('sort_field') in {'name','size','date'}:self.settings['sort_field']=saved['sort_field']
+            if type(saved.get('sort_desc')) is bool:self.settings['sort_desc']=saved['sort_desc']
             if saved.get("concurrency") in {1, 2, 3}:
                 self.settings["concurrency"] = saved["concurrency"]
         except (OSError, ValueError, AttributeError):

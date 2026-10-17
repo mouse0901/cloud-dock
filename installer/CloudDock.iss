@@ -1,7 +1,7 @@
 ﻿; Stage is derived from AppVersion below.
 #define Build "..\work\desktop-build"
 #ifndef AppVersion
-#define AppVersion "0.6.2"
+#define AppVersion "0.6.3"
 #endif
 #undef Stage
 #define Stage "H:\CodexOutputs\packages\cloud-dock\" + AppVersion + "\CloudDock-" + AppVersion + "-Windows-x64"

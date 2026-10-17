@@ -75,13 +75,14 @@ class AuthLifecycleTests(unittest.IsolatedAsyncioTestCase):
         async def slow_label():
             await real_sleep(.08)
             return "测试账号 · SVIP"
-        panel.api.account_label = slow_label
+        panel.api.account_label = AsyncMock(side_effect=slow_label)
         with patch("asyncio.timeout", side_effect=lambda seconds: real_timeout(.04 if seconds == 300 else .4)), patch("asyncio.sleep", new=AsyncMock()):
             await panel.begin()
             await panel.task
         self.assertTrue(panel.api.authenticated)
         self.assertIn("目录读取成功", panel.status.value)
-        self.assertEqual(panel.account_text.value, "测试账号 · SVIP")
+        self.assertEqual(panel.account_text.value, "")
+        panel.api.account_label.assert_not_awaited()
 
     async def test_optional_label_timeout_keeps_successful_login(self):
         panel, _ = self.make_panel("baidu")
@@ -150,10 +151,11 @@ class AuthLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.Event().wait()
             except asyncio.CancelledError:
                 return "迟到旧账号"
-        panel.api.account_label = delayed_label
+        panel.api.account_label = AsyncMock(side_effect=delayed_label)
         with patch("asyncio.sleep", new=AsyncMock()):
             await panel.begin()
-            await asyncio.wait_for(started.wait(), 1)
+            await panel.task
+            panel.api.account_label.assert_not_awaited()
             await panel.cancel()
         self.assertFalse(panel.api.authenticated)
         self.assertEqual(panel.account_text.value, "")

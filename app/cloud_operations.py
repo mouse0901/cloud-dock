@@ -59,15 +59,16 @@ class CloudOperations:
             result=self.api._success(body,stage='files')
         self.guard(stamp)
         return result or {}
-    async def list(self,path):
+    async def list(self,path,limit=None):
         stamp=self.stamp();self.guard(stamp)
         if self.provider=='quark' and path not in self.api._directories:
             parent=str(PurePosixPath(path).parent)
-            await self.list(parent)
+            await self.list(parent,limit=limit)
         result=[]
         for page in range(10000):
             self.guard(stamp);rows=await self.api._fetch_files(path,page);self.guard(stamp)
             result.extend(rows)
+            if limit is not None and len(result)>limit:raise CloudOperationError('单次最多扫描 2000 项，请选择更小的文件夹。')
             if len(rows)<50:return result
         raise CloudOperationError('文件夹过大，请缩小备份范围。')
     async def mkdir(self,parent,name):
