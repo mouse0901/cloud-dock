@@ -32,7 +32,7 @@ $channelDir=Join-Path $release 'github\channels'
 New-Item -ItemType Directory -Force -Path $channelDir|Out-Null
 $manifestPath=Join-Path $channelDir ($Channel+'.json')
 $signaturePath=Join-Path $channelDir ($Channel+'.sig')
-$json=$manifest|ConvertTo-Json -Depth 8
+$json=($manifest|ConvertTo-Json -Depth 8).Replace("`r`n","`n").Replace("`r","`n")
 $encoding=New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($manifestPath,$json,$encoding)
 $rsa=New-Object System.Security.Cryptography.RSACryptoServiceProvider
