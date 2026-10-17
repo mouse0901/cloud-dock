@@ -28,6 +28,8 @@ class Bridge:
         self.stop=asyncio.Event();self.selections={};self.startups=[]
         from desktop.experience import Experience
         self.experience=Experience(self)
+        from desktop.productivity import Productivity
+        self.productivity=Productivity(self)
         for p in self.panels.values():p.set_download_root(self.workspace.settings['download_dir'])
     def create_panels(self):
         # Import the former Flet controllers off the first-response path.
@@ -50,7 +52,8 @@ class Bridge:
         self.update_start=asyncio.create_task(self.updates.start())
         self.startups=[asyncio.create_task(p.startup(saved_only=True)) for p in self.panels.values()]
     def update_busy(self):
-        active={'queued','resolving','preparing','uploading','downloading','committing','verifying'}
+        if any(row['kind']=='operation' and row['status']=='running' for row in self.productivity.jobs.values()):return True
+        active={'retrying','queued','resolving','preparing','uploading','downloading','committing','verifying'}
         if any(j.state in active for p in self.panels.values() for j in [*p.jobs,*p.upload_jobs]):return True
         return bool(self.features and (self.features.sync.active or self.features.backup.running))
     async def start(self):
@@ -62,6 +65,7 @@ class Bridge:
         if self.initializing:await asyncio.gather(self.initializing,return_exceptions=True)
         if self.update_start:self.update_start.cancel();await asyncio.gather(self.update_start,return_exceptions=True)
         if self.updates:await self.updates.close()
+        await self.productivity.close()
         await self.experience.close()
         if self.features:await self.features.close()
         for t in self.startups:t.cancel()
@@ -109,8 +113,8 @@ class Bridge:
                 'providers':providers,'tasks':self.tasks(),'download_dir':self.workspace.settings['download_dir'],
                 'favorites':self.experience.favorites() if self.features else [],
                 'file_view':{k:self.workspace.settings.get(k,v) for k,v in {'view':'list','sort_field':'name','sort_desc':False}.items()},
-                'update':self.updates.snapshot() if self.updates else {'status':'initializing','current':'0.6.3','enabled':False},
-                'version':'0.6.3','migration_notice':(self.workspace.data_dir/'migration.json').exists(),'theme':self.workspace.settings.get('theme','light'),'reduced':self.workspace.settings.get('reduce_motion',False)}
+                'update':self.updates.snapshot() if self.updates else {'status':'initializing','current':'0.6.4','enabled':False},
+                'version':'0.6.4','migration_notice':(self.workspace.data_dir/'migration.json').exists(),'theme':self.workspace.settings.get('theme','light'),'reduced':self.workspace.settings.get('reduce_motion',False)}
     def selected_paths(self,key,kind):
         value=self.selections.pop(key,None)
         if not value or time.monotonic()-value['at']>300 or value['kind']!=kind:raise UiError('文件选择已过期，请重新选择。')
@@ -122,6 +126,10 @@ class Bridge:
         key=secrets.token_hex(24);self.selections[key]={'kind':kind,'paths':paths,'at':time.monotonic()};return {'selection':key,'count':len(paths)}
     async def action(self,d):
         action=d.get('action')
+        if isinstance(action,str) and action.startswith('tools_'):
+            from app.cloud_operations import CloudOperationError
+            try:return await self.productivity.action(d)
+            except CloudOperationError as error:raise UiError(str(error)) from None
         if action=='file_view':
             if d.get('view') in ('list','grid'):self.workspace.settings['view']=d['view']
             if d.get('sort_field') in ('name','size','date'):self.workspace.settings['sort_field']=d['sort_field']
@@ -238,11 +246,13 @@ class Server(ThreadingHTTPServer):
 class Handler(BaseHTTPRequestHandler):
     protocol_version='HTTP/1.1'
     def log_message(self,*args):pass
-    def respond(self,code,body,kind='application/json'):
+    def respond(self,code,body,kind='application/json',headers=None):
         data=json.dumps(body,ensure_ascii=False).encode() if kind=='application/json' else body
         self.send_response(code);self.send_header('Content-Type',kind+'; charset=utf-8');self.send_header('Content-Length',str(len(data)))
+
+        for k,v in (headers or {}).items():self.send_header(k,v)
         self.send_header('Cache-Control','no-store');self.send_header('Referrer-Policy','no-referrer');self.send_header('X-Content-Type-Options','nosniff')
-        self.send_header('Content-Security-Policy',"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
+        self.send_header('Content-Security-Policy',"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
         self.end_headers()
         try:self.wfile.write(data)
         except (BrokenPipeError,ConnectionResetError,ConnectionAbortedError):pass
@@ -262,6 +272,12 @@ class Handler(BaseHTTPRequestHandler):
         if path=='api/state':
             try:return self.respond(200,self.call(self.server.bridge.snapshot()))
             except UiError:return self.respond(503,{'error':'服务暂时忙，请稍后再试。'})
+        if path.startswith('api/media/'):
+            key=path.rsplit('/',1)[-1]
+            try:value=self.call(self.server.bridge.productivity.media_bytes(key,self.headers.get('Range','')))
+            except (UiError,OSError):value=None
+            if not value:return self.respond(404,{'error':'Preview unavailable'})
+            status,data,kind,headers=value;return self.respond(status,data,kind,headers)
         if path.startswith('api/thumbnail/'):
             key=path.rsplit('/',1)[-1]
             try:data=self.call(self.server.bridge.features.thumbnail(key)) if self.server.bridge.features else None
@@ -271,7 +287,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(200,data,kind)
         if path=='health':return self.respond(200,{'ok':True})
         if path=='cloud-dock.ico':return self.respond(200,(ROOT/'assets/branding/cloud-dock.ico').read_bytes(),'image/x-icon')
-        allowed={'':'index.html','index.html':'index.html','app.js':'app.js','prototype.css':'prototype.css','desktop.css':'desktop.css','theme-reveal.js':'theme-reveal.js','theme-reveal.css':'theme-reveal.css','cloud-dock.png':'cloud-dock.png','features.js':'features.js','features.css':'features.css','lifecycle.js':'lifecycle.js','clipboard.js':'clipboard.js','sync.js':'sync.js','sync.css':'sync.css','startup.js':'startup.js','update.js':'update.js','update.css':'update.css','experience.js':'experience.js','experience.css':'experience.css'}
+        allowed={'':'index.html','index.html':'index.html','app.js':'app.js','prototype.css':'prototype.css','desktop.css':'desktop.css','theme-reveal.js':'theme-reveal.js','theme-reveal.css':'theme-reveal.css','cloud-dock.png':'cloud-dock.png','features.js':'features.js','features.css':'features.css','lifecycle.js':'lifecycle.js','clipboard.js':'clipboard.js','sync.js':'sync.js','sync.css':'sync.css','startup.js':'startup.js','update.js':'update.js','update.css':'update.css','experience.js':'experience.js','experience.css':'experience.css','productivity.js':'productivity.js','productivity.css':'productivity.css'}
         if path not in allowed:return self.respond(404,{'error':'Not found'})
         file=ROOT/'desktop/web'/allowed[path]
         qa=os.environ.get('CLOUD_DOCK_QA_TIMINGS')

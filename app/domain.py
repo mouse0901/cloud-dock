@@ -28,9 +28,9 @@ class CloudFile:
         if self.is_dir:
             return "folder"
         ext = PurePosixPath(self.path).suffix.lower()
-        if ext in {".jpg", ".png", ".jpeg", ".webp"}:
+        if ext in {".jpg", ".png", ".jpeg", ".webp", ".gif", ".bmp"}:
             return "image"
-        if ext in {".mp4", ".mov", ".mkv"}:
+        if ext in {".mp4", ".mov", ".mkv", ".m4v", ".webm"}:
             return "video"
         if ext in {".pdf", ".docx", ".xlsx", ".md", ".txt", ".pptx"}:
             return "document"

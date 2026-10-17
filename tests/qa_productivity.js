@@ -1,0 +1,21 @@
+(async()=>{
+ const results={},delay=ms=>new Promise(r=>setTimeout(r,ms));
+ try{
+ const denied=await fetch(apiUrl('api/media/'+'a'.repeat(64)),{headers:{Range:'bytes=0-9'}});results.native_media_unknown_token=denied.status===404;
+ $('#sheet').close();await delay(40);window.qaOriginalApi=api;window.qaOriginalUrl=apiUrl;const calls=[];
+ const image={id:'qa-image',name:'插画.png',path:'/工作文件/插画.png',size:100,type:'image',date:'2026-10-17'},video={id:'qa-video',name:'演示.mp4',path:'/工作文件/演示.mp4',size:100,type:'video',date:'2026-10-17'};
+ data.baidu['/工作文件']=[{id:'qa-dir',name:'项目资料',path:'/工作文件/项目资料',type:'folder',size:0,date:'2026-10-17'},image,video];live.providers.baidu.path='/工作文件';live.providers.baidu.context='qa';live.providers.baidu.files=data.baidu['/工作文件'];localGo('baidu','/工作文件');updateLiveControls();
+ api=async(action,args={})=>{calls.push([action,args]);if(action==='tools_plan')return {confirmation:'qa-confirm',source:'/工作文件/插画.png',target:'/工作文件/重命名.png',kind:args.kind};if(action==='tools_browse')return {path:'/',rows:[{name:'另一个目录',path:'/另一个目录'}]};if(action==='tools_preview')return {token:args.ids[0]};if(action==='tools_search')return {token:'qa-search'};if(action==='tools_status')return args.token==='qa-search'?{status:'completed',message:'全盘搜索完成 · 共检查 120 项',rows:[{id:'result',name:'插画.png',parent:'/工作文件'}]}:{status:'completed',mime:args.token==='qa-video'?'video/mp4':'image/png',token:args.token};return {};};
+ apiUrl=path=>path.startsWith('api/media/')?(path.includes('qa-video')?'qa-preview.mp4':'cloud-dock.png'):qaOriginalUrl(path);
+ $('#newFolder').click();results.new_folder_dialog=!!$('#toolName');$('#toolName').value='新目录';$('#toolNext').click();await delay(40);results.mkdir_confirmation=!!$('#toolCommit')&&calls.some(x=>x[0]==='tools_plan'&&x[1].kind==='mkdir');$('#sheet').close();await delay(40);
+ state.selected=new Set(['qa-image']);syncSelection();document.dispatchEvent(new KeyboardEvent('keydown',{key:'F2',bubbles:true}));results.f2_name_selected=$('#toolName')?.value==='插画.png';$('#sheet').close();await delay(40);
+ showContext(image,500,300);results.right_click_operations=$('#contextMenu').textContent.includes('重命名')&&$('#contextMenu').textContent.includes('复制到');closeMenus();
+ $('#fileMore').click();[...$('#contextMenu').querySelectorAll('button')].find(b=>b.textContent.includes('移动到')).click();await delay(40);results.destination_browser=$('#toolFolders')?.textContent.includes('另一个目录');$('#sheet').close();await delay(40);
+ $('#searchAll').click();$('#wholeTerm').value='插画';$('#wholeSearch').dispatchEvent(new Event('submit',{cancelable:true}));await delay(80);results.whole_drive_results=$('#searchResults')?.textContent.includes('/工作文件')&&$('#searchProgress').textContent.includes('搜索完成');$('#sheet').close();await delay(80);results.search_close_cancels=calls.some(x=>x[0]==='tools_cancel'&&x[1].token==='qa-search');
+ openFile(image);await delay(300);results.image_preview_decoded=!!$('.media-stage img')?.naturalWidth;results.gallery_next=!$('#mediaNext').disabled;$('#mediaNext').click();await delay(400);const v=$('.media-stage video');results.video_preview_metadata=!!v&&v.controls&&v.readyState>=1;$('#sheet').close();await delay(80);results.preview_close_cancels=calls.some(x=>x[0]==='tools_cancel'&&x[1].token==='qa-video');
+ live.tasks=Array.from({length:2000},(_,i)=>({id:'q'+i,provider:'baidu',name:'文件 '+i+'.zip',direction:'download',status:'completed',total:100,done:100,speed:0,target:'H:/test/file.zip'}));changeView('transfers');document.querySelector('[data-transfer-filter=all]').click();results.large_queue_bounded=$$('[data-task]').length===100&&!!$('#moreTransfers');$('#moreTransfers').click();results.large_queue_load_more=$$('[data-task]').length===200;
+ results.resume_action=taskActions({archived:true,resumable:true,status:'paused',direction:'download'}).includes('继续下载');
+ document.body.classList.add('dark');localGo('baidu','/工作文件');updateLiveControls();$('#newFolder').click();results.dark_dialog=getComputedStyle($('#toolName')).color!=='rgb(36, 38, 43)';$('#sheet').close();await delay(30);document.body.classList.remove('dark');
+ }catch(error){results.error=String(error);}
+ await delay(400);results.narrow_toolbar_fits=$('.commandbar').scrollWidth<=$('.commandbar').clientWidth+1;window.qaProductivity=results;
+})();

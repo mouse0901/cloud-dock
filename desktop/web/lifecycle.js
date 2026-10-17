@@ -46,7 +46,7 @@
     try{
      await api('desktop_preferences',{close_to_tray:live?.close_to_tray!==false});result.action=true;
      const stateResponse=await fetch(apiUrl('api/state'));const snapshot=await stateResponse.json();
-     result.state=stateResponse.ok&&snapshot.version==='0.6.3'&&!snapshot.initializing;
+     result.state=stateResponse.ok&&snapshot.version==='0.6.4'&&!snapshot.initializing;
      const forbidden=await fetch(apiUrl('api/selection'));result.pickerBlocked=!forbidden.ok;
     }catch{}finally{send(result);}
    })();

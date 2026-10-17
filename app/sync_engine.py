@@ -255,6 +255,8 @@ class SyncEngine:
                         await self.apply(rule,rel,action,left,remote.get(rel),ops);operations+=1
                         if operations>=8:waiting+=1;break
                     issues=self.entries('sync_issue',rid)
+                    if not issues and not waiting and not self.entries('sync_pending',rid):rule['last_success']=time.time()
+                    rule['last_operations']=operations
                     rule.update(last=time.time(),next=time.time()+(5 if waiting else 60),failures=0,count=len(local.keys()|remote.keys()),
                                 status=f'{len(issues)} 项需要处理' if issues else '等待文件写入稳定或下一批检查' if waiting else f'已检查 · {unmanaged} 项不属于此方向' if unmanaged else '已同步')
             except asyncio.CancelledError:raise

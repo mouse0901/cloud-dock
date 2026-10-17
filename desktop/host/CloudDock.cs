@@ -80,7 +80,7 @@ class CloudWindow:Form {
     public CloudWindow(string folder,bool startup=false){
         startupLaunch=startup;startupRegistration=new StartupRegistration(Path.Combine(folder,"CloudDock.exe"));
         root=folder;url=Environment.GetEnvironmentVariable("CLOUD_DOCK_URL");nativeKey=Environment.GetEnvironmentVariable("CLOUD_DOCK_NATIVE_KEY");
-        Text="云屿 Cloud Dock · 0.6.3";ClientSize=new Size(1180,760);MinimumSize=new Size(980,680);StartPosition=FormStartPosition.CenterScreen;
+        Text="云屿 Cloud Dock · 0.6.4";ClientSize=new Size(1180,760);MinimumSize=new Size(980,680);StartPosition=FormStartPosition.CenterScreen;
         Icon=new Icon(Path.Combine(root,"assets","branding","cloud-dock.ico"));
         ReadPreferences();
         if(startupLaunch){WindowState=FormWindowState.Minimized;ShowInTaskbar=false;}
@@ -204,8 +204,30 @@ class CloudWindow:Form {
             if(method=="OPTIONS" && path=="api/action" && requestUri.Query==""){
                 e.Response=view.CoreWebView2.Environment.CreateWebResourceResponse(null,204,"No Content",cors);return;
             }
-            if(requestUri.Query!="" || !((method=="GET"&&(path=="api/state"||thumbnail))||(method=="POST"&&path=="api/action")))throw new InvalidOperationException();
+            if(requestUri.Query!="" || !((method=="GET"&&(path=="api/state"||thumbnail||NativeBridgePolicy.IsMedia(path)))||(method=="POST"&&path=="api/action")))throw new InvalidOperationException();
             await EnsureService();
+            if(NativeBridgePolicy.IsMedia(path)){
+                var request=(HttpWebRequest)WebRequest.Create(url+path);request.Proxy=null;request.Timeout=15000;
+                if(e.Request.Headers.Contains("Range")){
+                    string range=e.Request.Headers.GetHeader("Range");
+                    var match=System.Text.RegularExpressions.Regex.Match(range,@"^bytes=(\d*)-(\d*)$");
+                    if(!match.Success)throw new InvalidOperationException();
+                    if(match.Groups[1].Value=="")request.AddRange(-Int64.Parse(match.Groups[2].Value));
+                    else if(match.Groups[2].Value=="")request.AddRange(Int64.Parse(match.Groups[1].Value));
+                    else request.AddRange(Int64.Parse(match.Groups[1].Value),Int64.Parse(match.Groups[2].Value));
+                }
+                HttpWebResponse response;
+                try{response=(HttpWebResponse)await request.GetResponseAsync();}
+                catch(WebException error){response=error.Response as HttpWebResponse;if(response==null)throw;}
+                using(response)using(var input=response.GetResponseStream())using(var buffer=new MemoryStream()){
+                    var bytes=new byte[65536];int read;
+                    while((read=await input.ReadAsync(bytes,0,bytes.Length))>0){if(buffer.Length+read>134217728)throw new IOException();buffer.Write(bytes,0,read);}
+                    string headers=cors+"Content-Type: "+response.ContentType+"\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nAccept-Ranges: bytes\r\nContent-Length: "+buffer.Length+"\r\n";
+                    string contentRange=response.Headers[HttpResponseHeader.ContentRange];if(contentRange!=null)headers+="Content-Range: "+contentRange+"\r\n";
+                    e.Response=view.CoreWebView2.Environment.CreateWebResourceResponse(new MemoryStream(buffer.ToArray(),false),(int)response.StatusCode,response.StatusDescription,headers);
+                }
+                return;
+            }
             using(var client=new WebClient()){
                 client.Proxy=null;byte[] data;string kind="application/json";int status=200;
                 try{
@@ -356,6 +378,15 @@ class CloudWindow:Form {
             }
             if(type=="openWindowsStartup"){Process.Start(new ProcessStartInfo("ms-settings:startupapps"){UseShellExecute=true});return;}
             if(type=="completionSound"){if(!picking)System.Media.SystemSounds.Asterisk.Play();return;}
+            if(type=="dropFiles"){
+                if(id.Length>32||e.AdditionalObjects==null||e.AdditionalObjects.Count<1||e.AdditionalObjects.Count>500)return;
+                var dropped=new List<string>();
+                foreach(var obj in e.AdditionalObjects){var file=obj as CoreWebView2File;
+                    if(file==null||!Path.IsPathRooted(file.Path)||!File.Exists(file.Path)||(File.GetAttributes(file.Path)&FileAttributes.ReparsePoint)!=0){Send(new {id=id,error="请拖入普通文件；文件夹请使用同步与备份。"});return;}
+                    dropped.Add(file.Path);
+                }
+                var selected=await Post("api/selection",new {kind="files",paths=dropped.ToArray()},true);selected["id"]=id;Send(selected);return;
+            }
             if(picking||id.Length>32||(type!="pickFiles"&&type!="pickDirectory"&&type!="pickSyncFile"))return;
             picking=true;ownsPicker=true;string[] paths=null;
             if(type=="pickFiles")using(var dialog=new OpenFileDialog()){dialog.Title="选择上传文件";dialog.Multiselect=true;dialog.CheckFileExists=true;if(dialog.ShowDialog(this)==DialogResult.OK)paths=dialog.FileNames;}
@@ -387,7 +418,7 @@ class CloudWindow:Form {
             if(!String.IsNullOrEmpty(url))await Task.WhenAny(Post("api/action",new {action="shutdown"}),Task.Delay(8000));
             if(backend!=null && !backend.HasExited)await Task.WhenAny(Task.Run(()=>backend.WaitForExit()),Task.Delay(8000));
         }catch{}
-        if(backend!=null && !backend.HasExited){closing=false;closeToTray=true;Text="云屿 Cloud Dock · 0.6.3";RestoreWindow(false);MessageBox.Show(this,"后台仍在保存或核对任务。请稍后再次退出；安装程序不会替换正在使用的文件。","云屿");return;}
+        if(backend!=null && !backend.HasExited){closing=false;closeToTray=true;Text="云屿 Cloud Dock · 0.6.4";RestoreWindow(false);MessageBox.Show(this,"后台仍在保存或核对任务。请稍后再次退出；安装程序不会替换正在使用的文件。","云屿");return;}
         done=true;tray.Visible=false;Timing("exit_saved");Close();
     }
     async Task RunQa(){
@@ -434,7 +465,7 @@ class CloudWindow:Form {
             await view.CoreWebView2.ExecuteScriptAsync("document.querySelector('#sheet').close();settings();document.querySelector('#clipboardSwitch').click();");await Task.Delay(500);
             results["release_controls"]=await view.CoreWebView2.ExecuteScriptAsync("Boolean(document.querySelector('#releaseNotes')&&document.querySelector('#exportDiagnostics'))")=="true";
             var diagnostic=await Post("api/action",new {action="diagnostics"});var diagnosticReport=(Dictionary<string,object>)diagnostic["report"];
-            results["diagnostics_allowlist"]=Convert.ToString(diagnosticReport["version"])=="0.6.3"&&!json.Serialize(diagnostic).Contains("download_dir");
+            results["diagnostics_allowlist"]=Convert.ToString(diagnosticReport["version"])=="0.6.4"&&!json.Serialize(diagnostic).Contains("download_dir");
             results["startup_setting"]=await view.CoreWebView2.ExecuteScriptAsync("Boolean(document.querySelector('#startupSwitch') && !document.querySelector('#startupSwitch').disabled)")=="true";
             results["clipboard_setting_off"]=await view.CoreWebView2.ExecuteScriptAsync("Boolean(live.clipboard_links===false && document.querySelector('#clipboardSwitch').getAttribute('aria-checked')==='false')")=="true";
             await view.CoreWebView2.ExecuteScriptAsync("document.querySelector('#clipboardSwitch').click();");await Task.Delay(500);
@@ -482,6 +513,15 @@ class CloudWindow:Form {
             results["membership_hidden"]=await view.CoreWebView2.ExecuteScriptAsync("!document.body.innerText.includes('VIP') && Boolean(document.querySelector('#capacityDetail'))")=="true";
             await Task.Delay(250);
             if(!String.IsNullOrEmpty(capture))using(var file=File.Create(capture+".capacity.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,file);
+            string extraQa=Path.Combine(root,"tests","qa_productivity.js");
+            if(File.Exists(extraQa)){
+                ClientSize=new Size(980,680);await Task.Delay(250);
+                await view.CoreWebView2.ExecuteScriptAsync(File.ReadAllText(extraQa,Encoding.UTF8));
+                var extraWait=Stopwatch.StartNew();
+                while(extraWait.ElapsedMilliseconds<12000 && await view.CoreWebView2.ExecuteScriptAsync("Boolean(window.qaProductivity)")!="true")await Task.Delay(100);
+                File.WriteAllText(lifecycle+".productivity.json",await view.CoreWebView2.ExecuteScriptAsync("window.qaProductivity||{timeout:true}"));
+                if(!String.IsNullOrEmpty(capture))using(var file=File.Create(capture+".productivity.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,file);
+            }
             File.WriteAllText(lifecycle,json.Serialize(results));
         }
         RequestExit();

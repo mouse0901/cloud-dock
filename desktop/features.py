@@ -52,7 +52,10 @@ class Features:
                  'direction':'upload' if upload else 'download','status':j.state,'done':j.done,'total':j.total,'speed':0,'error':j.error,'warning':getattr(j,'warning',''),
                  'restart':j.requires_restart,'committed':getattr(j,'commit_started',False),'target':str(getattr(j,'target','') or ''),'connections':0,'group':getattr(j,'_download_group','')}
             if upload:row.update(local=str(j.local),fingerprint=asdict(j.fingerprint),directory=j.directory,remote_id=j.remote_id)
-            else:row['destination']=str(j.destination)
+            else:
+                from app.download_checkpoint import checkpoint
+                row['destination']=str(j.destination)
+                row['checkpoint']=checkpoint(j)
             marker=(j.state,j.done//(1024*1024),getattr(j,'commit_started',False),getattr(j,'remote_id',None))
             old_marker=self.last_write.get(key)
             if old_marker!=marker and (old_marker is None or old_marker[0]!=marker[0] or old_marker[2:]!=marker[2:] or time.monotonic()-self.last_write_time.get(key,0)>=2):
@@ -66,9 +69,9 @@ class Features:
         for row in self.store.all('transfer'):
             if row['id'] in active:continue
             public={k:v for k,v in row.items() if k in {'id','provider','name','path','direction','status','done','total','speed','error','warning','restart','committed','target','connections','group'}}
-            public['archived']=True
+            public['archived']=True;public['resumable']=bool(row.get('checkpoint'))
             if row['status'] not in ('completed','cancelled'):
-                public.update(status='paused',error='已保留任务，重新连接原账号后可'+('重新下载。' if row['direction']=='download' else '核对后继续上传。'),restart=False)
+                public.update(status='paused',error='已保留任务，重新连接原账号后可'+(('从已保存断点继续。' if row.get('checkpoint') else '重新下载。') if row['direction']=='download' else '核对后继续上传。'),restart=False)
             result.append(public)
         return result
     async def loop(self):
@@ -107,11 +110,17 @@ class Features:
         if row['direction']=='download':
             current=next((f for f in files if f.id==item.id and f.path==item.path and f.size==item.size and f.revision==item.revision),None)
             if current is None:raise CloudOperationError('云端文件已变化，请重新选择；未复用旧任务。')
-            previous=p.download_destination
-            try:p.download_destination=Path(row['destination']);await p.start_download(current)
-            finally:p.download_destination=previous
-            job=next((j for j in p.jobs if j.item.id==item.id and j.item.path==item.path and j.state!='completed'),None)
-            if job is None:raise CloudOperationError('无法恢复下载任务，请重新选择文件。')
+            from app.download_checkpoint import restore
+            from app.direct_download import DownloadError
+            job=await p.start_download(current,destination=Path(row['destination']),notify=False)
+            if job is None:raise CloudOperationError('这个文件已有传输任务。')
+            try:
+                if row.get('checkpoint'):restore(job,row['checkpoint'])
+            except (DownloadError,OSError) as error:
+                p.jobs.remove(job)
+                raise CloudOperationError(str(error)) from None
+            job._desktop_id=row['id'];job._persistent_account=row['account']
+            p._ensure_live_worker()
         else:
             local=Path(row['local'])
             if asdict(Fingerprint.read(local))!=row['fingerprint']:raise CloudOperationError('本地文件已变化，请重新选择上传。')
@@ -140,7 +149,18 @@ class Features:
             if row:
                 command=d.get('command')
                 if command=='resume':await self.resume(row)
-                elif command=='cancel':row.update(status='cancelled',error='');self.store.put('transfer',row['id'],row)
+                elif command=='cancel':
+                    # Keep an unverifiable leftover intact; never unlink an arbitrary stored path.
+                    if row.get('checkpoint'):
+                        from app.download_checkpoint import restore
+                        from app.direct_download import DirectDownload,DownloadError
+                        job=DirectDownload(CloudFile(**row['item']),Path(row['destination']),None,None,None,None)
+                        if row['checkpoint'].get('segments'):
+                            from app.parallel_download import ParallelDownload
+                            job=ParallelDownload(job.item,job.destination,None,None,None,None)
+                        try:restore(job,row['checkpoint']);await job.cancel()
+                        except (DownloadError,OSError):pass
+                    row.update(status='cancelled',error='',checkpoint=None);self.store.put('transfer',row['id'],row)
                 elif command=='open' and row['status']=='completed' and row['direction']=='download':
                     from app.local_files import open_local_folder
                     await asyncio.to_thread(open_local_folder,Path(row['target']).parent)
@@ -227,5 +247,17 @@ class Features:
         await self.sync.close()
         await self.backup.close()
         await self.account_status.close()
-        for name in self.ops:self.capture(name,force=True)
+        for name,p in self.bridge.panels.items():
+            # Stop the queue first so pausing one job cannot start another during shutdown.
+            p._downloads_stopping=True
+            worker=getattr(p,'_live_worker',None)
+            if worker:worker.cancel();await asyncio.gather(worker,return_exceptions=True)
+            for job in p.jobs:
+                if job.state not in ('completed','cancelled'):
+                    if getattr(job,'_share_download',False):await job.cancel()
+                    else:await job.pause()
+            self.last_write.clear()
+            self.capture(name,force=True)
+            # Shutdown closes sessions next; retained checkpoints belong to the original account.
+            p.jobs.clear()
         self.store.close()

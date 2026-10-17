@@ -1,6 +1,6 @@
 // Desktop workflow improvements; provider account metadata never enters this UI.
 (()=>{
- let preferencesLoaded=false,capacityKey='',favoriteKey='',transferFilter='active',transferRenderKey='';
+ let preferencesLoaded=false,capacityKey='',favoriteKey='',transferFilter='active',transferRenderKey='',taskLimit=100;
  state.sortDesc=false;
  const size=n=>n===0?'0 B':n>=1e12?(n/1e12).toFixed(2)+' TB':bytes(n);
  const labels={name:'名称',size:'大小',date:'修改日期'};
@@ -62,15 +62,16 @@
   }catch(e){if(token)api('folder_cancel',{provider,token}).catch(()=>{});report(e);}
  };
  const oldContext=showContext;showContext=function(file,x,y){oldContext(file,x,y);if(file.type==='folder'&&state.view==='files'&&!providerState()?.share){const b=document.createElement('button');b.innerHTML=icon('download')+'下载文件夹';b.onclick=()=>{closeMenus();queue([file])};$('#contextMenu').prepend(b)}};
- const active=t=>['queued','resolving','preparing','uploading','downloading','committing','verifying'].includes(t.status);
+ const active=t=>['retrying','queued','resolving','preparing','uploading','downloading','committing','verifying'].includes(t.status);
  const category=t=>active(t)?'active':['completed','cancelled'].includes(t.status)?'completed':'attention';
  renderTasks=function(){
-  const all=live?.tasks||[],tasks=all.filter(t=>transferFilter==='all'||category(t)===transferFilter),list=$('#transferList');
-  const key=transferFilter+JSON.stringify(all.map(t=>[t.id,t.status,t.error,t.warning,t.target,t.group,t.restart,t.committed]));
+  const all=live?.tasks||[],filtered=all.filter(t=>transferFilter==='all'||category(t)===transferFilter),tasks=filtered.slice(-taskLimit),list=$('#transferList');
+  const key=transferFilter+taskLimit+JSON.stringify(all.map(t=>[t.id,t.status,t.error,t.warning,t.target,t.group,t.restart,t.committed]));
   if(key!==transferRenderKey||!$('#transferTabs')){transferRenderKey=key;const scroll=list.scrollTop;
-   list.innerHTML=`<div class="transfer-title">传输<small id="overallSpeed"></small></div><div class="transfer-tabs" id="transferTabs" role="tablist">${[['active','进行中'],['attention','待处理'],['completed','已结束'],['all','全部']].map(([key,label])=>`<button role="tab" aria-selected="${transferFilter===key}" data-transfer-filter="${key}">${label}<small>${all.filter(t=>key==='all'||category(t)===key).length}</small></button>`).join('')}<button class="quiet" id="clearFinished">清理已结束记录</button></div><div id="syncTransfers"></div>`+
+   list.innerHTML=`<div class="transfer-title">传输<small id="overallSpeed"></small></div><div class="transfer-tabs" id="transferTabs" role="tablist">${[['active','进行中'],['attention','待处理'],['completed','已结束'],['all','全部']].map(([key,label])=>`<button role="tab" aria-selected="${transferFilter===key}" data-transfer-filter="${key}">${label}<small>${all.filter(t=>key==='all'||category(t)===key).length}</small></button>`).join('')}<button class="quiet" id="clearFinished">清理已结束记录</button></div><div id="syncTransfers"></div>${filtered.length>tasks.length?`<button id="moreTransfers" class="quiet">已显示最近 ${tasks.length} 项，加载更多</button>`:""}`+
     (tasks.length?[...tasks].reverse().map(t=>`<article class="task ${category(t)==='completed'?'task-compact':''}" data-task="${esc(t.id)}"><div class="task-top">${icon(t.direction==='upload'?'upload':'download')}<span class="task-name" title="${esc(t.name)}">${esc(t.name)}</span><span class="task-status">${statusNames[t.status]||t.status}</span><span class="task-actions">${taskActions(t)}${t.status==='completed'&&t.direction==='download'?'<button class="quiet" data-command="copy">复制路径</button>':''}</span></div>${category(t)!=='completed'?'<div class="task-progress"><i></i></div>':''}<div class="task-foot"><span>${names[t.provider]} · ${t.direction==='upload'?'上传':'下载'}${t.group?' · '+esc(t.group):''}</span><span class="task-percent"></span></div>${t.error?`<p class="task-error">${esc(t.error)}</p>`:''}${t.warning?`<p class="task-error">${esc(t.warning)}</p>`:''}</article>`).join(''):`<div class="empty transfer-empty">${icon('transfer')}<strong>${transferFilter==='active'?'当前没有进行中的传输':transferFilter==='attention'?'没有需要处理的任务':'这里还没有传输记录'}</strong><p>在网盘中选中文件或文件夹，即可开始下载。</p></div>`);
-   list.scrollTop=scroll;$$('[data-transfer-filter]').forEach(b=>b.onclick=()=>{transferFilter=b.dataset.transferFilter;renderTasks()});
+   list.scrollTop=scroll;$$('[data-transfer-filter]').forEach(b=>b.onclick=()=>{transferFilter=b.dataset.transferFilter;taskLimit=100;renderTasks()});
+   if($('#moreTransfers'))$('#moreTransfers').onclick=()=>{taskLimit+=100;renderTasks()};
    $('#clearFinished').disabled=!all.some(t=>category(t)==='completed');$('#clearFinished').onclick=()=>{const ids=all.filter(t=>category(t)==='completed').slice(0,500).map(t=>t.id);sheetKind='history';sheet('清理已结束记录','<p>仅清理传输列表中的记录，已下载的本地文件与云端文件都会保留。</p><button class="primary" id="clearHistoryConfirm">清理 '+ids.length+' 条记录</button>');$('#clearHistoryConfirm').onclick=()=>api('history_clear',{ids}).then(async()=>{$('#sheet').close();await refreshState()}).catch(report)};
    $$('[data-task] [data-command]').forEach(b=>b.onclick=async()=>{const t=all.find(t=>t.id===b.closest('[data-task]').dataset.task);b.disabled=true;try{if(b.dataset.command==='copy'){await navigator.clipboard.writeText(t.target);toast('路径已复制')}else{await api('task',{provider:t.provider,id:t.id,command:b.dataset.command});await refreshState()}}catch(e){report(e)}finally{b.disabled=false}});
   }

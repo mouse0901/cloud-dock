@@ -72,11 +72,13 @@ class CloudOperations:
             if len(rows)<50:return result
         raise CloudOperationError('文件夹过大，请缩小备份范围。')
     async def mkdir(self,parent,name):
+        stamp=self.stamp();self.guard(stamp)
         if not name or name in ('.','..') or any(c in name for c in '/\\') or any(ord(c)<32 for c in name):raise CloudOperationError('文件夹名称无效。')
         rows=await self.list(parent);found=next((x for x in rows if x.name==name),None)
         if found:
             if not found.is_dir:raise CloudOperationError('云端有同名文件，未覆盖。')
             return found
+        self.guard(stamp)
         path=parent.rstrip('/')+'/'+name
         if self.provider=='baidu':await self.call('create',{'path':path,'isdir':'1','size':'0','block_list':'[]','rtype':'0'},{'a':'commit'})
         else:await self.call('file',{'pdir_fid':self.api._directories[parent],'file_name':name,'dir_init_lock':False,'dir_path':''})
@@ -100,6 +102,7 @@ class CloudOperations:
         target=directory.rstrip('/')+'/'+name
         if target==item.path:return fresh
         if any(x.name.casefold()==name.casefold() for x in await self.list(directory)):raise CloudOperationError('目标已有同名项目，未替换。')
+        self.guard(stamp)
         if self.provider=='baidu':
             value={'path':item.path,'newname':name}
             if directory!=item.parent:value['dest']=directory
@@ -115,6 +118,21 @@ class CloudOperations:
             if found:return found
             await asyncio.sleep(.5)
         raise CloudOperationError('改名或移动结果待核对，未重复提交。')
+    async def copy(self,item,directory):
+        if self.provider!='baidu':raise CloudOperationError('夸克暂未接入云端复制。')
+        stamp=self.stamp();self.guard(stamp)
+        fresh=next((x for x in await self.list(item.parent) if x.id==item.id),None)
+        if not fresh or (fresh.path,fresh.size,fresh.revision)!=(item.path,item.size,item.revision):raise CloudOperationError('源文件已变化，请刷新。')
+        if item.is_dir and (directory==item.path or directory.startswith(item.path+'/')):raise CloudOperationError('不能复制到自身或子目录。')
+        if any(x.name.casefold()==item.name.casefold() for x in await self.list(directory)):raise CloudOperationError('目标已有同名项目，未覆盖。')
+        self.guard(stamp)
+        await self.call('filemanager',{'filelist':json.dumps([{'path':item.path,'dest':directory,'newname':item.name}]),'async':'0','ondup':'fail'},{'opera':'copy','onnest':'fail'})
+        for _ in range(8):
+            self.guard(stamp)
+            found=next((x for x in await self.list(directory) if x.name==item.name and x.is_dir==item.is_dir and (item.is_dir or x.size==item.size)),None)
+            if found:return found
+            await asyncio.sleep(.5)
+        raise CloudOperationError('复制结果尚未确认，请刷新核对；未重复提交。')
     async def trash(self,page=0):
         if type(page) is not int or page<0:raise CloudOperationError('页码无效。')
         body=await self.call('recycle/list' if self.provider=='baidu' else 'file/recycle/list',params=

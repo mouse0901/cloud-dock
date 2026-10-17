@@ -17,7 +17,7 @@ class BaiduAdaptiveDownload(ParallelDownload):
     async def _transfer(self, source):
         if self.segments is None and self.allow_parallel and not self.allow_parallel():
             self.connections=1
-        if self.connections == 1:
+        if self.connections == 1 and self.segments is None:
             self.transfer_mode = 'single'
             return await DirectDownload._transfer(self, source)
         try:

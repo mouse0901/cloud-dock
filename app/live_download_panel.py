@@ -137,7 +137,15 @@ class LiveDownloadMixin:
 
     async def _run_queued(self, job):
         if job.state == 'queued':
-            return await job.run()
+            for attempt in range(3):
+                try:return await job.run()
+                except DownloadError as error:
+                    if error.code not in ('download_network','download_incomplete') or job.requires_restart or attempt==2:raise
+                    job.state='retrying';job.error=f'连接中断，{(attempt+1)*3} 秒后自动继续（{attempt+1}/2）'
+                    self._downloads_changed()
+                    await asyncio.sleep((attempt+1)*3)
+                    if job.state!='retrying':return
+                    job.state='queued'
 
     async def _drive_download_queue(self):
         try:
@@ -169,7 +177,9 @@ class LiveDownloadMixin:
 
     async def pause_download(self, job, e=None):
         if job in self.jobs and job.state not in {'completed', 'cancelled'}:
+            reconnecting=job.state=='retrying'
             await job.pause()
+            if reconnecting:job.error=''
             self._downloads_changed()
 
     async def resume_download(self, job, e=None):
