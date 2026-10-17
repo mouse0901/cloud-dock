@@ -1,14 +1,14 @@
 {
-  "enabled": false,
-  "repository": "",
+  "enabled": true,
+  "repository": "mouse0901/cloud-dock-releases",
   "channels": {
     "stable": {
-      "manifest": "",
-      "signature": ""
+      "manifest": "https://raw.githubusercontent.com/mouse0901/cloud-dock-releases/main/channels/stable.json",
+      "signature": "https://raw.githubusercontent.com/mouse0901/cloud-dock-releases/main/channels/stable.sig"
     },
     "beta": {
-      "manifest": "",
-      "signature": ""
+      "manifest": "https://raw.githubusercontent.com/mouse0901/cloud-dock-releases/main/channels/beta.json",
+      "signature": "https://raw.githubusercontent.com/mouse0901/cloud-dock-releases/main/channels/beta.sig"
     }
   },
   "public_key": {

@@ -10,6 +10,6 @@ foreach($channel in @('stable','beta')){
     $source.channels.$channel.manifest=$base+'.json'
     $source.channels.$channel.signature=$base+'.sig'
 }
-$json=$source|ConvertTo-Json -Depth 8
+$json=($source|ConvertTo-Json -Depth 8)+"`n"
 [System.IO.File]::WriteAllText($path,$json,(New-Object System.Text.UTF8Encoding($false)))
 Write-Output ('已配置公开更新仓库：'+$Repository)
