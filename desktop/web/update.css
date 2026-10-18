@@ -1,6 +1,7 @@
 .update-card{border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin:8px 0 16px;background:var(--surface)}
 .update-card-head{display:flex;align-items:flex-start;gap:12px}.update-card-head>div{flex:1}.update-card strong{display:block;font-size:14px}.update-card small{display:block;color:var(--muted);margin-top:4px;line-height:1.55}
 .update-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.update-progress{height:4px;border-radius:4px;background:var(--line);overflow:hidden;margin-top:12px}.update-progress>span{display:block;height:100%;background:var(--accent);transition:width .2s ease}
+.update-route{font-size:10px!important;opacity:.9}.update-network select{min-width:112px}.update-proxy-manual>div{display:flex;align-items:center;gap:7px;max-width:58%}.update-proxy-manual input{min-width:0;width:210px;border:1px solid var(--line);border-radius:7px;padding:8px;background:var(--bg);color:var(--text);font-size:11px}
 .update-notes{white-space:pre-wrap;max-height:130px;overflow:auto;margin:10px 0 0;color:var(--muted);font-size:12px;line-height:1.65}.update-error{color:#c25520!important}
 .update-channel{border:1px solid var(--line);background:var(--surface);color:var(--text);border-radius:9px;padding:7px 9px}
 body.reduced .update-progress>span{transition:none}

@@ -1,11 +1,14 @@
+import asyncio
+import base64
 import hashlib
 import json
 import tempfile
 import threading
 import unittest
+import urllib.error
 from pathlib import Path
 
-from app.updater import UpdateClient, UpdateSecurityError, UpdateService, is_newer, verify_rs256
+from app.updater import UpdateClient, UpdateError, UpdateSecurityError, UpdateService, is_newer, verify_rs256
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests" / "fixtures"
@@ -58,6 +61,32 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(manifest["version"], "9.9.9")
         self.assertEqual(manifest["artifact"]["kind"], "installer")
 
+    def test_signed_channel_falls_back_to_github_contents_api(self):
+        config = json.loads(json.dumps(self.source))
+        config["enabled"] = True; config["repository"] = "example/cloud-dock-releases"
+        raw = "https://raw.githubusercontent.com/example/cloud-dock-releases/main/channels/beta"
+        config["channels"]["beta"] = {"manifest": raw + ".json", "signature": raw + ".sig"}
+        files = {"channels/beta.json": self.payload, "channels/beta.sig": self.signature}
+        def api_only(request, timeout=0):
+            if request.full_url.startswith(raw):
+                raise urllib.error.URLError("raw blocked")
+            path = request.full_url.split("/contents/", 1)[1].split("?", 1)[0]
+            body = json.dumps({"type":"file","path":path,"encoding":"base64",
+                               "content":base64.b64encode(files[path]).decode()}).encode()
+            return Response(body, request.full_url)
+        client = UpdateClient(config, api_only)
+        manifest = client.check("beta")
+        self.assertEqual(manifest["version"], "9.9.9")
+        self.assertTrue(client.last_route.startswith("GitHub API"))
+
+    def test_proxy_modes_are_validated_and_auto_prefers_active_local_proxy(self):
+        client = UpdateClient(self.source, proxy_mode="auto", probe=lambda port: port == 19828)
+        self.assertEqual(client._routes[0][0], "本机代理 127.0.0.1:19828")
+        client.configure_proxy("manual", "http://127.0.0.1:19828")
+        self.assertEqual(client.proxy_url, "http://127.0.0.1:19828")
+        with self.assertRaises(UpdateError): client.configure_proxy("manual", "http://name:secret@127.0.0.1:19828")
+        with self.assertRaises(UpdateError): client.configure_proxy("unknown", "")
+
     def test_resumable_download_and_hash(self):
         content = b"hello world!"
         digest = hashlib.sha256(content).hexdigest()
@@ -71,6 +100,19 @@ class UpdaterTests(unittest.TestCase):
             result = UpdateClient(self.source, resume).download(manifest, target, threading.Event())
             self.assertEqual(result.read_bytes(), content)
             self.assertFalse(target.with_suffix(".exe.part").exists())
+
+    def test_download_retries_next_network_route(self):
+        content = b"proxy route content"
+        digest = hashlib.sha256(content).hexdigest()
+        manifest = {"version":"9.9.9","artifact":{"url":"https://github.com/example/cloud-dock-releases/releases/download/v9.9.9/CloudDock-9.9.9-Setup-x64.exe","size":len(content),"sha256":digest}}
+        def unavailable(request, timeout=0): raise urllib.error.URLError("direct blocked")
+        def proxied(request, timeout=0): return Response(content, "https://release-assets.githubusercontent.com/example")
+        client = UpdateClient(self.source, unavailable)
+        client._routes = [("直接连接", unavailable), ("本机代理 127.0.0.1:19828", proxied)]
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / "CloudDock-9.9.9-Setup-x64.exe"
+            self.assertEqual(client.download(manifest, target, threading.Event()).read_bytes(), content)
+            self.assertIn("127.0.0.1:19828", client.last_route)
 
     def test_manifest_rejects_wrong_repository(self):
         manifest = json.loads(self.payload)
@@ -91,6 +133,18 @@ class UpdaterTests(unittest.TestCase):
             service=UpdateService(workspace,lambda:False,UpdateClient(config))
             self.assertEqual(service.state["status"],"idle")
             self.assertIsNone(service.manifest)
+
+    def test_service_saves_manual_proxy_without_credentials(self):
+        class Workspace:
+            def __init__(self, folder):
+                self.data_dir=Path(folder);self.settings={"update_channel":"beta","update_proxy_mode":"auto","update_proxy_url":""}
+            async def save(self): self.saved=True
+        with tempfile.TemporaryDirectory() as folder:
+            workspace=Workspace(folder);client=UpdateClient(self.source, lambda *args,**kwargs: None)
+            service=UpdateService(workspace,lambda:False,client)
+            asyncio.run(service.preferences({"proxy_mode":"manual","proxy_url":"http://127.0.0.1:19828"}))
+            self.assertEqual(workspace.settings["update_proxy_url"],"http://127.0.0.1:19828")
+            self.assertEqual(service.snapshot()["proxy_mode"],"manual")
 
 
 if __name__ == "__main__": unittest.main()

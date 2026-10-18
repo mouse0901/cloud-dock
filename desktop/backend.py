@@ -118,8 +118,8 @@ class Bridge:
                 'providers':providers,'tasks':self.tasks(),'download_dir':self.workspace.settings['download_dir'],
                 'favorites':self.experience.favorites() if self.features else [],
                 'file_view':{k:self.workspace.settings.get(k,v) for k,v in {'view':'list','sort_field':'name','sort_desc':False}.items()},
-                'update':self.updates.snapshot() if self.updates else {'status':'initializing','current':'0.6.7','enabled':False},
-                'version':'0.6.7','migration_notice':(self.workspace.data_dir/'migration.json').exists(),'theme':self.workspace.settings.get('theme','light'),'reduced':self.workspace.settings.get('reduce_motion',False)}
+                'update':self.updates.snapshot() if self.updates else {'status':'initializing','current':'0.6.8','enabled':False},
+                'version':'0.6.8','migration_notice':(self.workspace.data_dir/'migration.json').exists(),'theme':self.workspace.settings.get('theme','light'),'reduced':self.workspace.settings.get('reduce_motion',False)}
     def selected_paths(self,key,kind):
         value=self.selections.pop(key,None)
         if not value or time.monotonic()-value['at']>300 or value['kind']!=kind:raise UiError('文件选择已过期，请重新选择。')

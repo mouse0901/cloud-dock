@@ -17,13 +17,13 @@
 ## 本地验证
 
 ```powershell
-H:\CodexOutputs\projects\cloud-dock-0.6.7-dev\runtime\python\python.exe -B -m unittest discover -s H:\CodexOutputs\projects\cloud-dock-0.6.7-dev\tests -v
+H:\CodexOutputs\projects\cloud-dock-0.6.2-dev\runtime\python\python.exe -B -m unittest discover -s H:\CodexOutputs\projects\cloud-dock-0.6.2-dev\tests -v
 ```
 
 生成 Windows 安装包：
 
 ```powershell
-& H:\CodexOutputs\projects\cloud-dock-0.6.7-dev\tools\build_installer.ps1
+& H:\CodexOutputs\projects\cloud-dock-0.6.2-dev\tools\build_installer.ps1
 ```
 
 发行文件输出到 `H:\CodexOutputs\packages\cloud-dock\<版本>`。发布方法见 `docs/RELEASE.md`。

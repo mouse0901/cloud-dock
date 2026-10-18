@@ -16,7 +16,7 @@ class Workspace:
                          "close_to_tray": True, "clipboard_links": True,
                          "update_auto_check": True, "update_auto_download": False,
                          "update_channel": "beta", "update_last_checked": 0,
-                         "update_skipped": ""}
+                         "update_skipped": "", "update_proxy_mode": "auto", "update_proxy_url": ""}
         self.transfers: list[Transfer] = []
         self._save_lock = asyncio.Lock()
         try:
@@ -35,6 +35,8 @@ class Workspace:
             if saved.get("update_channel") in {"stable", "beta"}:self.settings["update_channel"]=saved["update_channel"]
             if type(saved.get("update_last_checked")) in {int, float} and saved["update_last_checked"] >= 0:self.settings["update_last_checked"]=saved["update_last_checked"]
             if isinstance(saved.get("update_skipped"),str) and len(saved["update_skipped"])<=64:self.settings["update_skipped"]=saved["update_skipped"]
+            if saved.get("update_proxy_mode") in {"auto","system","direct","manual"}:self.settings["update_proxy_mode"]=saved["update_proxy_mode"]
+            if isinstance(saved.get("update_proxy_url"),str) and len(saved["update_proxy_url"])<=256:self.settings["update_proxy_url"]=saved["update_proxy_url"]
             if type(saved.get("reduce_motion")) is bool:
                 self.settings["reduce_motion"] = saved["reduce_motion"]
             if saved.get("theme") in {"light", "dark", "system"}:

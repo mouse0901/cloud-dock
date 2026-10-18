@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import threading
 import time
 import urllib.error
@@ -20,6 +21,8 @@ VERSION = json.loads((ROOT / "version.json").read_text(encoding="utf-8"))["versi
 ACTIVE_STATES = {"queued", "resolving", "preparing", "uploading", "downloading", "committing", "verifying"}
 _VERSION = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?$")
 _DIGEST_INFO = bytes.fromhex("3031300d060960864801650304020105000420")
+_PROXY_MODES = {"auto", "system", "direct", "manual"}
+_LOOPBACK_PROXY_PORTS = (19828, 7890, 7897, 10809, 10808, 8080)
 
 
 class UpdateError(Exception):
@@ -99,21 +102,95 @@ def load_source(path=None):
     return config
 
 
-class UpdateClient:
-    def __init__(self, config=None, opener=None):
-        self.config = config or load_source()
-        self.opener = opener or urllib.request.urlopen
+def _proxy_address(value):
+    value = (value or "").strip()
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as error:
+        raise UpdateError("代理地址格式无效。") from error
+    if (parsed.scheme not in {"http", "https"} or not parsed.hostname or port is None or
+            parsed.username or parsed.password or parsed.path not in {"", "/"} or parsed.query or parsed.fragment):
+        raise UpdateError("代理地址应为 http://主机:端口，且不要包含账号、路径或参数。")
+    host = parsed.hostname.lower()
+    shown = "[" + host + "]" if ":" in host else host
+    return parsed.scheme + "://" + shown + ":" + str(port)
 
-    def _read(self, url, limit):
-        _https(url, {"raw.githubusercontent.com"})
-        request = urllib.request.Request(url, headers={"User-Agent": "CloudDock-Updater/" + VERSION, "Accept": "application/octet-stream"})
+
+def _local_proxy_available(port):
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.12):
+            return True
+    except OSError:
+        return False
+
+
+class UpdateClient:
+    def __init__(self, config=None, opener=None, proxy_mode="auto", proxy_url="", probe=None):
+        self.config = config or load_source()
+        self._custom_opener = opener
+        self._probe = probe or _local_proxy_available
+        self.last_route = ""
+        self.configure_proxy(proxy_mode, proxy_url)
+
+    def configure_proxy(self, mode="auto", url=""):
+        if mode not in _PROXY_MODES:
+            raise UpdateError("更新代理模式无效。")
+        clean = _proxy_address(url) if mode == "manual" else ""
+        self.proxy_mode, self.proxy_url = mode, clean
+        self.last_route = ""
+        if self._custom_opener:
+            self._routes = [("测试连接", self._custom_opener)]
+            return
+        routes = []
+        if mode == "auto":
+            for port in _LOOPBACK_PROXY_PORTS:
+                if self._probe(port):
+                    address = "http://127.0.0.1:" + str(port)
+                    opener = urllib.request.build_opener(urllib.request.ProxyHandler({"http": address, "https": address})).open
+                    routes.append(("本机代理 127.0.0.1:" + str(port), opener))
+            routes.append(("系统网络", urllib.request.urlopen))
+        elif mode == "system":
+            routes.append(("系统代理", urllib.request.urlopen))
+        elif mode == "direct":
+            routes.append(("直接连接", urllib.request.build_opener(urllib.request.ProxyHandler({})).open))
+        else:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({"http": clean, "https": clean})).open
+            routes.append(("手动代理 " + clean, opener))
+        self._routes = routes
+
+    def _read_url(self, url, limit, hosts, source="GitHub", timeout=12, accept="application/octet-stream"):
+        _https(url, hosts)
+        errors = []
+        for label, opener in self._routes:
+            request = urllib.request.Request(url, headers={"User-Agent": "CloudDock-Updater/" + VERSION, "Accept": accept})
+            try:
+                with opener(request, timeout=timeout) as response:
+                    if getattr(response, "status", response.getcode()) != 200:
+                        raise UpdateError("更新服务暂时不可用。")
+                    data = response.read(limit + 1)
+                if len(data) > limit:
+                    raise UpdateSecurityError("更新响应超过安全限制。")
+                self.last_route = source + " · " + label
+                return data
+            except UpdateSecurityError:
+                raise
+            except (urllib.error.URLError, TimeoutError, OSError, UpdateError) as error:
+                errors.append(error)
+        raise UpdateError("无法连接 GitHub 更新服务，请在网络代理中选择自动检测或填写本机代理。") from (errors[-1] if errors else None)
+
+    def _read_api_file(self, repository, path, limit):
+        api = "https://api.github.com/repos/" + repository + "/contents/" + path + "?ref=main"
+        raw = self._read_url(api, max(64 * 1024, limit * 2 + 4096), {"api.github.com"}, "GitHub API",
+                             accept="application/vnd.github+json")
         try:
-            with self.opener(request, timeout=15) as response:
-                if getattr(response, "status", response.getcode()) != 200:
-                    raise UpdateError("更新服务暂时不可用。")
-                data = response.read(limit + 1)
-        except (urllib.error.URLError, TimeoutError, OSError) as error:
-            raise UpdateError("无法连接更新服务，请稍后重试。") from error
+            body = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
+            if body.get("type") != "file" or body.get("path") != path or body.get("encoding") != "base64":
+                raise ValueError("unexpected contents response")
+            encoded = "".join(body["content"].splitlines())
+            data = base64.b64decode(encoded, validate=True)
+        except (KeyError, ValueError, TypeError, UnicodeError) as error:
+            raise UpdateSecurityError("GitHub 备用更新响应无效。") from error
         if len(data) > limit:
             raise UpdateSecurityError("更新响应超过安全限制。")
         return data
@@ -126,11 +203,17 @@ class UpdateClient:
         entry = self.config.get("channels", {}).get(channel) or {}
         manifest_url, signature_url = entry.get("manifest", ""), entry.get("signature", "")
         repository = self.config.get("repository", "").strip("/")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+            raise UpdateSecurityError("更新仓库配置无效。")
         expected = "https://raw.githubusercontent.com/" + repository + "/main/channels/" + channel
         if manifest_url != expected + ".json" or signature_url != expected + ".sig":
             raise UpdateSecurityError("更新通道地址与发布仓库不匹配。")
-        payload = self._read(manifest_url, 256 * 1024)
-        signature = self._read(signature_url, 16 * 1024)
+        try:
+            payload = self._read_url(manifest_url, 256 * 1024, {"raw.githubusercontent.com"}, "GitHub Raw")
+            signature = self._read_url(signature_url, 16 * 1024, {"raw.githubusercontent.com"}, "GitHub Raw")
+        except UpdateError:
+            payload = self._read_api_file(repository, "channels/" + channel + ".json", 256 * 1024)
+            signature = self._read_api_file(repository, "channels/" + channel + ".sig", 16 * 1024)
         verify_rs256(payload, signature, self.config["public_key"])
         try:
             manifest = json.loads(payload.decode("utf-8"), object_pairs_hook=_unique_object)
@@ -172,39 +255,50 @@ class UpdateClient:
         free = shutil.disk_usage(final.parent).free
         if free < artifact["size"] - existing + 64 * 1024 * 1024:
             raise UpdateError("磁盘空间不足，无法下载更新。")
-        headers = {"User-Agent": "CloudDock-Updater/" + VERSION, "Accept": "application/octet-stream"}
-        if existing:
-            headers["Range"] = "bytes=" + str(existing) + "-"
-        request = urllib.request.Request(artifact["url"], headers=headers)
-        try:
-            with self.opener(request, timeout=30) as response:
-                status = getattr(response, "status", response.getcode())
-                final_url = response.geturl()
-                _https(final_url, {"github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"})
-                if existing and status != 206:
-                    existing = 0
-                elif existing and not response.headers.get("Content-Range", "").startswith("bytes " + str(existing) + "-"):
-                    raise UpdateSecurityError("服务器返回了无效的续传范围。")
-                mode = "ab" if existing else "wb"
-                done = existing
-                with part.open(mode) as output:
-                    while True:
-                        if cancel.is_set():
-                            raise UpdateCancelled("已暂停更新下载。")
-                        block = response.read(1024 * 1024)
-                        if not block:
-                            break
-                        done += len(block)
-                        if done > artifact["size"]:
-                            raise UpdateSecurityError("下载内容超过清单大小。")
-                        output.write(block)
-                        if progress:
-                            progress(done, artifact["size"])
-                    output.flush(); os.fsync(output.fileno())
-        except UpdateError:
-            raise
-        except (urllib.error.URLError, TimeoutError, OSError) as error:
-            raise UpdateError("更新下载中断，可稍后继续。") from error
+        errors = []
+        completed = False
+        for label, opener in self._routes:
+            existing = part.stat().st_size if part.is_file() else 0
+            if existing > artifact["size"]:
+                part.unlink(); existing = 0
+            headers = {"User-Agent": "CloudDock-Updater/" + VERSION, "Accept": "application/octet-stream"}
+            if existing:
+                headers["Range"] = "bytes=" + str(existing) + "-"
+            request = urllib.request.Request(artifact["url"], headers=headers)
+            try:
+                with opener(request, timeout=30) as response:
+                    status = getattr(response, "status", response.getcode())
+                    final_url = response.geturl()
+                    _https(final_url, {"github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"})
+                    if existing and status != 206:
+                        existing = 0
+                    elif existing and not response.headers.get("Content-Range", "").startswith("bytes " + str(existing) + "-"):
+                        raise UpdateSecurityError("服务器返回了无效的续传范围。")
+                    mode = "ab" if existing else "wb"
+                    done = existing
+                    with part.open(mode) as output:
+                        while True:
+                            if cancel.is_set():
+                                raise UpdateCancelled("已暂停更新下载。")
+                            block = response.read(1024 * 1024)
+                            if not block:
+                                break
+                            done += len(block)
+                            if done > artifact["size"]:
+                                raise UpdateSecurityError("下载内容超过清单大小。")
+                            output.write(block)
+                            if progress:
+                                progress(done, artifact["size"])
+                        output.flush(); os.fsync(output.fileno())
+                self.last_route = "更新下载 · " + label
+                completed = True
+                break
+            except (UpdateSecurityError, UpdateCancelled):
+                raise
+            except (urllib.error.URLError, TimeoutError, OSError) as error:
+                errors.append(error)
+        if not completed:
+            raise UpdateError("更新下载中断，请检查网络代理后继续。") from (errors[-1] if errors else None)
         if part.stat().st_size != artifact["size"]:
             raise UpdateError("更新下载尚未完成，可稍后继续。")
         if _sha256(part) != artifact["sha256"]:
@@ -226,7 +320,8 @@ class UpdateService:
     def __init__(self, workspace, busy, client=None):
         self.workspace = workspace
         self.busy = busy
-        self.client = client or UpdateClient()
+        self.client = client or UpdateClient(proxy_mode=workspace.settings.get("update_proxy_mode", "auto"),
+                                             proxy_url=workspace.settings.get("update_proxy_url", ""))
         self.directory = workspace.data_dir / "updates"
         self.state_path = self.directory / "state.json"
         self.task = None
@@ -270,6 +365,9 @@ class UpdateService:
         result["can_install"] = result["status"] == "downloaded" and not result["busy"] and result["install_supported"]
         result["skipped"] = self.workspace.settings.get("update_skipped", "")
         result["last_checked"] = self.workspace.settings.get("update_last_checked", 0)
+        result["proxy_mode"] = self.workspace.settings.get("update_proxy_mode", "auto")
+        result["proxy_url"] = self.workspace.settings.get("update_proxy_url", "")
+        result["route"] = self.client.last_route
         return result
 
     async def start(self, delay=20):
@@ -293,6 +391,14 @@ class UpdateService:
             self.workspace.settings["update_channel"] = data["channel"]
             self.workspace.settings["update_skipped"] = ""
             self.state.update(channel=data["channel"], status="idle", available="", notes="", error="")
+            self.manifest = None
+        if "proxy_mode" in data or "proxy_url" in data:
+            mode = data.get("proxy_mode", self.workspace.settings.get("update_proxy_mode", "auto"))
+            url = data.get("proxy_url", self.workspace.settings.get("update_proxy_url", ""))
+            self.client.configure_proxy(mode, url)
+            self.workspace.settings["update_proxy_mode"] = mode
+            self.workspace.settings["update_proxy_url"] = self.client.proxy_url
+            self.state.update(status="idle", available="", notes="", error="")
             self.manifest = None
         await self.workspace.save()
 

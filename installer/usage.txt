@@ -1,7 +1,7 @@
-云屿 Cloud Dock 0.6.7 · Windows 更新测试版
+云屿 Cloud Dock 0.6.8 · Windows 更新测试版
 
-安装程序：CloudDock-0.6.7-Setup-x64.exe
-便携版本：CloudDock-0.6.7-Windows-x64.zip
+安装程序：CloudDock-0.6.8-Setup-x64.exe
+便携版本：CloudDock-0.6.8-Windows-x64.zip
 需要 Windows 10/11 x64、.NET Framework 4.8、Microsoft WebView2。
 安装程序按当前 Windows 用户安装，不需要安装 Python。缺少 WebView2 时会提示联网安装微软运行环境。
 

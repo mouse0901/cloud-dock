@@ -84,7 +84,7 @@ partial class CloudWindow:Form {
     public CloudWindow(string folder,bool startup=false){
         startupLaunch=startup;startupRegistration=new StartupRegistration(Path.Combine(folder,"CloudDock.exe"));
         root=folder;url=Environment.GetEnvironmentVariable("CLOUD_DOCK_URL");nativeKey=Environment.GetEnvironmentVariable("CLOUD_DOCK_NATIVE_KEY");
-        Text="云屿 Cloud Dock · 0.6.7";ClientSize=new Size(1180,760);MinimumSize=new Size(980,680);StartPosition=FormStartPosition.CenterScreen;
+        Text="云屿 Cloud Dock · 0.6.8";ClientSize=new Size(1180,760);MinimumSize=new Size(980,680);StartPosition=FormStartPosition.CenterScreen;
         Icon=new Icon(Path.Combine(root,"assets","branding","cloud-dock.ico"));
         ReadPreferences();
         if(startupLaunch){WindowState=FormWindowState.Minimized;ShowInTaskbar=false;}
@@ -466,7 +466,7 @@ partial class CloudWindow:Form {
             if(!String.IsNullOrEmpty(url))await Task.WhenAny(Post("api/action",new {action="shutdown"}),Task.Delay(8000));
             if(backend!=null && !backend.HasExited)await Task.WhenAny(Task.Run(()=>backend.WaitForExit()),Task.Delay(8000));
         }catch{}
-        if(backend!=null && !backend.HasExited){closing=false;closeToTray=true;Text="云屿 Cloud Dock · 0.6.7";RestoreWindow(false);MessageBox.Show(this,"后台仍在保存或核对任务。请稍后再次退出；安装程序不会替换正在使用的文件。","云屿");return;}
+        if(backend!=null && !backend.HasExited){closing=false;closeToTray=true;Text="云屿 Cloud Dock · 0.6.8";RestoreWindow(false);MessageBox.Show(this,"后台仍在保存或核对任务。请稍后再次退出；安装程序不会替换正在使用的文件。","云屿");return;}
         done=true;tray.Visible=false;Timing("exit_saved");Close();
     }
     async Task RunQa(){
@@ -513,7 +513,7 @@ partial class CloudWindow:Form {
             await view.CoreWebView2.ExecuteScriptAsync("document.querySelector('#sheet').close();settings();document.querySelector('#clipboardSwitch').click();");await Task.Delay(500);
             results["release_controls"]=await view.CoreWebView2.ExecuteScriptAsync("Boolean(document.querySelector('#releaseNotes')&&document.querySelector('#exportDiagnostics'))")=="true";
             var diagnostic=await Post("api/action",new {action="diagnostics"});var diagnosticReport=(Dictionary<string,object>)diagnostic["report"];
-            results["diagnostics_allowlist"]=Convert.ToString(diagnosticReport["version"])=="0.6.7"&&!json.Serialize(diagnostic).Contains("download_dir");
+            results["diagnostics_allowlist"]=Convert.ToString(diagnosticReport["version"])=="0.6.8"&&!json.Serialize(diagnostic).Contains("download_dir");
             results["startup_setting"]=await view.CoreWebView2.ExecuteScriptAsync("Boolean(document.querySelector('#startupSwitch') && !document.querySelector('#startupSwitch').disabled)")=="true";
             results["clipboard_setting_off"]=await view.CoreWebView2.ExecuteScriptAsync("Boolean(live.clipboard_links===false && document.querySelector('#clipboardSwitch').getAttribute('aria-checked')==='false')")=="true";
             await view.CoreWebView2.ExecuteScriptAsync("document.querySelector('#clipboardSwitch').click();");await Task.Delay(500);
