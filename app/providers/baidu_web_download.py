@@ -86,21 +86,25 @@ class BaiduWebDownloads:
         name = name[:48] if isinstance(name, str) else ""
         return (name + " · " if name else "") + level
 
-    def new_download_resolver(self):
+    def new_download_resolver(self, *, prefer_native=False):
         # One version pin per queued transfer: old partials stay protected while
         # a fresh task can download a file that changed after a directory refresh.
         versions = {}
+        attempts = {}
         async def resolve(item):
-            return await self.download_source(item, versions=versions)
+            attempt=attempts.get(item.id,0)
+            return await self.download_source(item, versions=versions, route_attempt=attempt,allow_native=prefer_native)
+        def reject_native(item):attempts[item.id]=attempts.get(item.id,0)+1
+        resolve.reject_native=reject_native
         return resolve
 
-    async def download_source(self, item, *, versions=None):
+    async def download_source(self, item, *, versions=None, route_attempt=0,allow_native=False):
         try:
-            return await self._download_source(item, {} if versions is None else versions)
+            return await self._download_source(item, {} if versions is None else versions, route_attempt,allow_native)
         except BaiduApiError as exc:
             raise DownloadError(exc.code, str(exc)) from None
 
-    async def _download_source(self, item, versions):
+    async def _download_source(self, item, versions, route_attempt=0,allow_native=False):
         if not self.authenticated:
             raise BaiduApiError("web_session", "请先扫码登录百度网盘")
         if (item.provider != "baidu" or item.is_dir
@@ -133,7 +137,14 @@ class BaiduWebDownloads:
             versions[item.id] = version
         except (KeyError, TypeError, ValueError):
             raise BaiduApiError("download_changed", "网盘文件信息与列表不符，请刷新目录") from None
-        link = metadata.get("dlink")
+        link = None
+        user_agent = UA_DOWNLOAD
+        if allow_native and getattr(self,'prefer_located_download',False):
+            from app.providers.baidu_locate import BaiduLocate,NATIVE_UA
+            if not hasattr(self,'_locator'):self._locator=BaiduLocate(self)
+            link=await self._locator.link(item,route_attempt)
+            if link:user_agent=NATIVE_UA
+        if not link:link = metadata.get("dlink")
         if not isinstance(link, str) or not link:
             link = await self._signed_download_link(item.id)
         link = checked_download_url(link)
@@ -141,7 +152,7 @@ class BaiduWebDownloads:
         # Baidu's returned md5 may be an opaque/transformed identity. Retain it
         # above for change detection; do not claim it is a raw content checksum.
         return DownloadSource(link, item.size, {
-            "User-Agent": UA_DOWNLOAD, "Referer": "https://pan.baidu.com/"})
+            "User-Agent": user_agent, "Referer": "https://pan.baidu.com/"})
 
     async def _signed_download_link(self, file_id):
         params = self._web_params()

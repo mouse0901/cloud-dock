@@ -81,7 +81,7 @@ class LiveDownloadMixin:
     def make_download(self, item, destination, client, resolver, validate, progress, **kwargs):
         return DirectDownload(item, destination, client, resolver, validate, progress, **kwargs)
 
-    async def start_download(self, item, e=None, *, destination=None, group='', notify=True):
+    async def start_download(self, item, e=None, *, destination=None, group='', notify=True, resolver_override=None, share_key=''):
         if self.closed or self._downloads_stopping or self.reader is None:
             return
         if item.is_dir:
@@ -93,13 +93,14 @@ class LiveDownloadMixin:
             self._downloads_changed()
             return
         if any(job.item.id == item.id and job.item.path == item.path
+               and getattr(job,'_share_key','') == share_key
                and job.state not in {'completed', 'cancelled'} for job in self.jobs):
             self.download_status.value = '此文件已在任务列表中，可继续或重试原任务。'
             self._downloads_changed()
             return
         api, reader, generation = self.api, self.reader, self.generation
         session = getattr(api, 'session_id', None)
-        resolver = self.get_download_resolver()
+        resolver = resolver_override or self.get_download_resolver()
         owner = f'{generation}:{id(reader)}:{id(api)}'
         reader_is_view = getattr(self, 'download_reader_is_view', False)
 
@@ -118,6 +119,9 @@ class LiveDownloadMixin:
                 raise DownloadError('download_account', '账号会话已改变，请重新创建下载任务')
             return result
 
+        reject_native=getattr(resolver,'__dict__',{}).get('reject_native')
+        if reject_native is not None:bound_resolver.reject_native=reject_native
+
         async def progress(done, total):
             if current_owner() == owner and job in self.jobs:
                 self._downloads_changed()
@@ -126,7 +130,8 @@ class LiveDownloadMixin:
         job = self.make_download(item, destination, api.client,
                              bound_resolver, api.validate_download_url, progress,
                              owner=owner, current_owner=current_owner)
-        job._share_download=bool(getattr(self, "share", None))
+        job._share_download=bool(share_key or getattr(self, "share", None))
+        job._share_key=share_key
         job._download_group=group
         self.jobs.append(job)
         self.download_status.value = '已加入真实下载队列，文件保存在：' + str(destination)

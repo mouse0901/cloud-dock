@@ -156,7 +156,7 @@ class BaiduRangeTests(unittest.IsolatedAsyncioTestCase):
 
  async def test_rejected_parallel_ranges_fall_back_without_mixing_partial_bytes(self):
   from app.baidu_adaptive_download import BaiduAdaptiveDownload,account_connections
-  self.assertEqual([account_connections(x) for x in ('paid','unknown','free')],[1,1,4])
+  self.assertEqual([account_connections(x) for x in ('paid','unknown','free')],[8,4,4])
   service=Service()
   async def policy(request,start,end):
    if 'range' in request.headers and end>0:return httpx.Response(403)
@@ -167,4 +167,4 @@ class BaiduRangeTests(unittest.IsolatedAsyncioTestCase):
     resolve=AsyncMock(return_value=source)
     job=BaiduAdaptiveDownload(item,tmp,client,resolve,lambda url:url,AsyncMock(),connections=4)
     saved=await job.run();self.assertEqual(saved.read_bytes(),DATA);self.assertEqual(job.transfer_mode,'single');self.assertEqual(job.connections,1)
-    self.assertEqual(resolve.await_count,2)
+    self.assertEqual(resolve.await_count,3)

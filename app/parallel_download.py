@@ -185,12 +185,15 @@ class ParallelDownload(DirectDownload):
             finally:
                 await response.aclose()
 
-    def _prepare_segments(self):
+    def segment_size(self):
         # Keep the plan fixed for this task, including pause/link refresh.
         # More workers need enough pieces on medium files. Keep the tested
         # 512 KiB plan for <=64 workers; 128 workers use 256 KiB work units.
         minimum = (256 if self.connections > 64 else 512) * 1024
-        size = max(minimum, (self.total + 4095) // 4096)
+        return max(minimum, (self.total + 4095) // 4096)
+
+    def _prepare_segments(self):
+        size = self.segment_size()
         plan = [Segment(start, min(start+size, self.total)-1) for start in range(0, self.total, size)]
         with self.part.open('xb') as stream:
             stat = os.fstat(stream.fileno())

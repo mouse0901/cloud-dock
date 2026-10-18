@@ -34,7 +34,7 @@
   pin.textContent=live.favorites?.some(f=>f.provider===state.provider&&f.path===state.path)?'取消固定':'固定此位置';
  }
  const oldControls=updateLiveControls;updateLiveControls=function(){oldControls();refreshExtras()};
- const oldRender=render;render=function(animate=false){oldRender(animate);up.hidden=state.view!=='files';up.disabled=state.path==='/'||!providerState()?.connected||providerState()?.busy;crumb.hidden=state.view!=='files';$('#locationLabel').hidden=state.view==='files';footerHint.textContent=state.view==='files'?(providerState()?.share?'分享目录':'双击打开 · Ctrl / Shift 多选'):state.view==='transfers'?'退出后保留传输记录':'云屿 · 个人工作空间';updateSortHeaders();};
+ const oldRender=render;render=function(animate=false){oldRender(animate);up.hidden=state.view!=='files';up.disabled=state.path==='/'||!providerState()?.connected||providerState()?.busy;crumb.hidden=state.view!=='files';$('#locationLabel').hidden=state.view==='files';footerHint.textContent='';updateSortHeaders();};
  visible=function(){const term=$('#search').value.toLocaleLowerCase();return currentFiles().filter(x=>(state.filter==='all'||x.type===state.filter)&&x.name.toLocaleLowerCase().includes(term)).sort((a,b)=>{const folders=Number(b.type==='folder')-Number(a.type==='folder');if(folders)return folders;let n=state.sort==='size'?a.size-b.size:state.sort==='date'?String(a.date).localeCompare(String(b.date)):a.name.localeCompare(b.name,'zh-Hans-CN',{numeric:true});return (state.sortDesc?-1:1)*n||a.name.localeCompare(b.name,'zh-Hans-CN',{numeric:true})})};
  function persistView(){api('file_view',{view:state.mode,sort_field:state.sort,sort_desc:state.sortDesc}).catch(report)}
  function sortBy(field){state.sortDesc=state.sort===field?!state.sortDesc:false;state.sort=field;render();persistView()}
@@ -45,13 +45,15 @@
  $('#selectAll').onchange=()=>{state.selected=$('#selectAll').checked?new Set(visible().map(x=>x.id)):new Set();syncSelection()};
  document.addEventListener('keydown',e=>{if($('#sheet').open||e.target.matches('input,textarea'))return;if(e.altKey&&e.key==='ArrowUp'&&state.view==='files'){e.preventDefault();up.click()}if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='a'&&['files','recent'].includes(state.view)){e.preventDefault();state.selected=new Set(visible().map(x=>x.id));syncSelection()}if(e.key==='F5'&&state.view==='files'){e.preventDefault();$('#refresh').click()}});
  const previousQueue=queue;
- queue=async function(files){if(!files.some(x=>x.type==='folder'))return previousQueue(files);const p=providerState();if(state.view!=='files'||!p?.connected||p.busy||p.share){toast('请在本人网盘目录选择文件夹');return;}
+ queue=async function(files){if($('#sheet').open)return;if(!files.some(x=>x.type==='folder'))return previousQueue(files);const p=providerState();if(state.view!=='files'||!p?.connected||p.busy||p.share){toast('请在本人网盘目录选择文件夹');return;}
   let token='',finished=false,provider=state.provider;
   try{
-   const result=await api('folder_preview',{provider,context:p.context,ids:files.map(x=>x.id)});token=result.token;sheetKind='folderDownload';
-   sheet('下载文件夹','<p id="folderScanStatus">正在扫描文件夹…</p><p id="folderDestination"></p><div class="account-actions"><button class="quiet" id="cancelFolderDownload">取消</button><button class="primary" id="confirmFolderDownload" disabled>开始下载</button></div>');
-   const cancel=()=>{if(!finished)api('folder_cancel',{provider,token}).catch(()=>{});finished=true;};
+   sheetKind='folderDownload';
+   sheet('下载文件夹','<p id="folderScanStatus" role="status">正在核对账号并准备扫描…</p><p id="folderDestination"></p><div class="account-actions"><button class="quiet" id="cancelFolderDownload">取消</button><button class="primary" id="confirmFolderDownload" disabled>开始下载</button></div>');
+   const cancel=()=>{if(!finished&&token)api('folder_cancel',{provider,token}).catch(()=>{});finished=true;};
    $('#sheet').addEventListener('close',cancel,{once:true});$('#cancelFolderDownload').onclick=()=>$('#sheet').close();
+   const result=await api('folder_preview',{provider,context:p.context,ids:files.map(x=>x.id)});token=result.token;
+   if(finished){api('folder_cancel',{provider,token}).catch(()=>{});return;}
    $('#confirmFolderDownload').onclick=async()=>{const b=$('#confirmFolderDownload');b.disabled=true;try{const r=await api('folder_confirm',{provider,token});finished=true;$('#sheet').close();toast(r.count?'已加入 '+r.count+' 个文件':'文件夹已准备；文件可能已在队列中');await refreshState();changeView('transfers')}catch(e){report(e);$('#folderScanStatus').textContent=e.message;}};
    while(!finished&&$('#sheet').open&&sheetKind==='folderDownload'){
     const s=await api('folder_status',{provider,token});if(finished||!$('#folderScanStatus'))break;
@@ -59,7 +61,7 @@
     $('#folderDestination').textContent='保存到：'+s.destination;$('#confirmFolderDownload').disabled=s.state!=='ready';
     if(s.state!=='scanning')break;await new Promise(r=>setTimeout(r,600));
    }
-  }catch(e){if(token)api('folder_cancel',{provider,token}).catch(()=>{});report(e);}
+  }catch(e){if(token)api('folder_cancel',{provider,token}).catch(()=>{});if(!finished&&$('#folderScanStatus'))$('#folderScanStatus').textContent=e.message;report(e);}
  };
  const oldContext=showContext;showContext=function(file,x,y){oldContext(file,x,y);if(file.type==='folder'&&state.view==='files'&&!providerState()?.share){const b=document.createElement('button');b.innerHTML=icon('download')+'下载文件夹';b.onclick=()=>{closeMenus();queue([file])};$('#contextMenu').prepend(b)}};
  const active=t=>['retrying','queued','resolving','preparing','uploading','downloading','committing','verifying'].includes(t.status);
@@ -81,8 +83,8 @@
  };
  const oldSheet=sheet;sheet=function(title,html){$('#sheet').classList.remove('settings-sheet');oldSheet(title,html)};
  const oldSettings=settings;settings=function(){oldSettings();const body=$('#sheetBody'),nodes=[...body.children],nav=document.createElement('nav'),panels=document.createElement('div');nav.className='settings-nav';panels.className='settings-panels';$('#sheet').classList.add('settings-sheet');
-  const groups=[['general','运行'],['appearance','外观'],['storage','传输与存储'],['convenience','便捷操作'],['about','关于与更新']],sections={};for(const [key,label]of groups){const s=document.createElement('section');s.dataset.settingsPanel=key;s.setAttribute('aria-label',label);sections[key]=s;panels.append(s);const b=document.createElement('button');b.textContent=label;b.onclick=()=>selectSettings(key);b.dataset.settingsTab=key;nav.append(b)}
-  let group='general';for(const node of nodes){if(node.matches('.setting-group-title')){group=({'运行与同步':'general','外观':'appearance','传输与存储':'storage','便捷操作':'convenience'})[node.textContent]||'about';continue;}if(node.querySelector('#releaseNotes,#exportDiagnostics,#updateCard')||node.id==='updateCard'||node.classList.contains('setting-about'))group='about';sections[group].append(node)}
+  const groups=[['general','运行'],['appearance','外观'],['storage','传输与存储'],['feedback','声音与通知'],['convenience','便捷操作'],['about','关于与更新']],sections={};for(const [key,label]of groups){const s=document.createElement('section');s.dataset.settingsPanel=key;s.setAttribute('aria-label',label);sections[key]=s;panels.append(s);const b=document.createElement('button');b.textContent=label;b.onclick=()=>selectSettings(key);b.dataset.settingsTab=key;nav.append(b)}
+  let group='general';for(const node of nodes){if(node.matches('.setting-group-title')){group=({'运行与同步':'general','外观':'appearance','传输与存储':'storage','便捷操作':'convenience','声音与通知':'feedback'})[node.textContent]||'about';continue;}if(node.querySelector('#releaseNotes,#exportDiagnostics,#updateCard')||node.id==='updateCard'||node.classList.contains('setting-about'))group='about';sections[group].append(node)}
   body.replaceChildren(nav,panels);function selectSettings(key){nav.querySelectorAll('button').forEach(b=>b.classList.toggle('active',b.dataset.settingsTab===key));Object.entries(sections).forEach(([k,s])=>s.hidden=k!==key)}selectSettings('general');
  };$('#settings').onclick=settings;$('#sheet').addEventListener('close',()=>$('#sheet').classList.remove('settings-sheet'));
  render();refreshExtras();

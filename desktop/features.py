@@ -28,6 +28,8 @@ class Features:
         from app.history_manager import HistoryManager
         self.history=HistoryManager(self.sync)
         self.thumbs=ThumbnailCache(bridge.workspace.data_dir/'thumbnails')
+        from desktop.feedback import Feedback
+        self.feedback=Feedback(bridge.workspace,self.store)
         self.pending={};self.trash_rows={};self.thumb_items={};self.accounts={};self.closing=False
         self.sound_sequence=0;self.completed_pending=False;self.seen_completed=set();self.loop_task=None;self.last_write={};self.last_write_time={}
     async def start(self):
@@ -84,9 +86,19 @@ class Features:
             jobs=[j for p in self.bridge.panels.values() for j in [*p.jobs,*p.upload_jobs]]
             if self.completed_pending and not any(j.state in ('queued','preparing','uploading','downloading','committing','verifying') for j in jobs):
                 self.sound_sequence+=1;self.completed_pending=False
+            self.feedback.tick(self.bridge.tasks())
+            issue_count=len(self.store.all('sync_issue'))+len(self.store.all('sync_pending'))
+            self.feedback.condition('sync',issue_count>0,f'同步有 {issue_count} 项需要处理','sync',view='backups')
+            backup_issues=sum(len(self.store.issues(r['id'])) for r in self.backup.rules())
+            self.feedback.condition('backup',backup_issues>0,f'备份有 {backup_issues} 项需要处理','sync',view='backups')
+            for name,p in self.bridge.panels.items():
+                q=self.account_status.public(name)
+                self.feedback.condition('space:'+name,q.get('total',0)>0 and q.get('free',0)/q['total']<.05,'网盘剩余空间不足 5%','error',provider=name,view='files')
+                message=str(p.status.value or '')
+                self.feedback.condition('login:'+name,not p.api.authenticated and any(x in message for x in ('登录失效','登录过期','重新登录','授权失效')),'账号需要重新连接','error',provider=name,view='accounts')
             await asyncio.sleep(2)
     def snapshot(self):
-        return {'capacities':{name:self.account_status.public(name) for name in self.ops},
+        return {'feedback':self.feedback.snapshot(),'capacities':{name:self.account_status.public(name) for name in self.ops},
                 'sync_rules':[{**r,'issue_count':len(self.sync.entries('sync_issue',r['id'])),'pending_count':len(self.sync.entries('sync_pending',r['id'])),'active':self.sync.active.get(r['id'])} for r in self.sync.rules()],
                 'backups':[{**r,'issues':[{'path':x['id'].split(':',1)[-1],'message':x.get('error','需核对')} for x in self.store.issues(r['id'])][:50],'active':self.backup.running.get(r['id'])} for r in self.backup.rules()],
                 'sound_sequence':self.sound_sequence,'sound':self.bridge.workspace.settings.get('completion_sound',True)}

@@ -84,8 +84,14 @@ class BaiduUploader(UploadAdapter):
         code=body.get('errno')
         self.api.emit({'stage':'upload_'+route,'service_code':str(code) if str(code).lstrip('-').isdigit() else 'unknown'})
         if code not in (0,'0'):
-            if code in (-8,'-8'):raise UploadError('upload_conflict','目标已有同名文件，未覆盖，请重命名后上传。')
             safe=str(code) if re.fullmatch(r'-?\d{1,10}',str(code)) else 'unknown'
+            if route in ('gettemplatevariable','filemanager','recycle/list','recycle/restore'):
+                from app.cloud_operations import CloudOperationError
+                if code in (-6,'-6'):
+                    raise CloudOperationError('百度文件操作授权未通过（代码 '+safe+'），请重新连接账号后重试。')
+                labels={'gettemplatevariable':'账号核对','filemanager':'文件操作','recycle/list':'回收站读取','recycle/restore':'回收站还原'}
+                raise CloudOperationError('百度未完成'+labels[route]+'（代码 '+safe+'）。请刷新目录及回收站核对结果，未自动重复提交。')
+            if code in (-8,'-8'):raise UploadError('upload_conflict','目标已有同名文件，未覆盖，请重命名后上传。')
             raise UploadError('upload_service','百度未完成上传请求（代码 '+safe+'）。')
         return body
 

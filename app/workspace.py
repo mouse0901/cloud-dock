@@ -21,6 +21,9 @@ class Workspace:
         self._save_lock = asyncio.Lock()
         try:
             saved = json.loads((data_dir / "preferences.json").read_text(encoding="utf-8"))
+            if isinstance(saved.get("feedback"),dict):
+                from desktop.feedback import preferences
+                self.settings["feedback"] = preferences(saved)
             download_dir = saved.get("download_dir")
             if isinstance(download_dir,str) and "\x00" not in download_dir and Path(download_dir).is_absolute():
                 self.settings["download_dir"] = download_dir

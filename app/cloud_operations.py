@@ -68,7 +68,7 @@ class CloudOperations:
         for page in range(10000):
             self.guard(stamp);rows=await self.api._fetch_files(path,page);self.guard(stamp)
             result.extend(rows)
-            if limit is not None and len(result)>limit:raise CloudOperationError('单次最多扫描 2000 项，请选择更小的文件夹。')
+            if limit is not None and len(result)>limit:raise CloudOperationError('文件夹内容超过本次扫描上限，请分批选择更小的文件夹。')
             if len(rows)<50:return result
         raise CloudOperationError('文件夹过大，请缩小备份范围。')
     async def mkdir(self,parent,name):

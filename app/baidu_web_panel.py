@@ -23,10 +23,11 @@ class BaiduWebPanel(RememberLoginMixin, LiveBrowserMixin, LiveDownloadMixin, Bai
         self.init_remember_login("baidu", client, session_store)
         super().__init__(page,on_session_change,client)
         self.api = BaiduWebApi(self.client, diagnostic)
+        self.api.prefer_located_download = True
         from app.parallel_download import DownloadGate
-        self.download_connections = 1
+        self.download_connections = 4
         self._range_disabled_generation = None
-        self.download_gate = DownloadGate(4)
+        self.download_gate = DownloadGate(16)
         self.download_available = True
         self.init_live_downloads()
         self.directory_title = "我的百度网盘"
@@ -36,6 +37,9 @@ class BaiduWebPanel(RememberLoginMixin, LiveBrowserMixin, LiveDownloadMixin, Bai
         self.begin_button.content = "获取二维码"
         self.cancel_button.content = "退出登录"
         self.status.value = "使用百度网盘 App 扫码，连接自己的账号。"
+
+    def get_download_resolver(self):
+        return self.api.new_download_resolver(prefer_native=True)
 
     def make_download(self, item, destination, client, resolver, validate, progress, **kwargs):
         from app.baidu_adaptive_download import BaiduAdaptiveDownload

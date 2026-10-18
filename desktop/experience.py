@@ -131,10 +131,11 @@ class Experience:
         return {'token':token}
 
     async def scan(self, ops, plan, items, parent):
-        seen=set();destinations={}
+        seen=set();destinations={};queue=asyncio.Queue()
+        for item in items:queue.put_nowait((item,0))
         async def visit(item, depth):
             ops.guard(plan['stamp'])
-            if depth>32 or len(seen)>=2000:raise CloudOperationError('单次最多扫描 2000 项、32 层；请选择更小的文件夹。')
+            if depth>64 or len(seen)>=10000:raise CloudOperationError('单次最多扫描 10000 项、64 层；请选择更小的文件夹。')
             if item.id in seen:return
             seen.add(item.id)
             relative=PurePosixPath(item.path).relative_to(PurePosixPath(parent))
@@ -146,23 +147,36 @@ class Experience:
             destinations[key]=item.path
             if item.is_dir:
                 plan['folders']+=1;plan['directories'].append(str(target))
-                for child in await ops.list(item.path,limit=2000-len(seen)):
+                for child in await ops.list(item.path,limit=10000-len(seen)):
                     if child.parent!=item.path:raise CloudOperationError('网盘返回了所选文件夹以外的项目，已停止扫描。')
-                    await visit(child,depth+1)
+                    queue.put_nowait((child,depth+1))
             else:
                 if type(item.size) is not int or item.size<0:raise CloudOperationError('文件大小无法确认，请刷新。')
                 plan['count']+=1;plan['bytes']+=item.size
                 plan['items'].append((item,target.parent))
+        async def worker():
+            while True:
+                item,depth=await queue.get()
+                try:await visit(item,depth)
+                finally:queue.task_done()
+        workers=[asyncio.create_task(worker()) for _ in range(4)]
+        joined=asyncio.create_task(queue.join())
         try:
-            async with asyncio.timeout(180):
-                for item in items:await visit(item,0)
+            async with asyncio.timeout(600):
+                done,_=await asyncio.wait([joined,*workers],return_when=asyncio.FIRST_COMPLETED)
+                for task in done:task.result()
                 ops.guard(plan['stamp']);plan['state']='ready'
         except asyncio.CancelledError:
             plan['state']='cancelled'
         except Exception as error:
+            from app.operation_diagnostics import record
+            record('folder_scan',error)
             plan['state']='failed'
-            plan['error']=str(error) if isinstance(error,CloudOperationError) else '扫描未完成，请重试；尚未创建下载任务。'
+            plan['error']=str(error) if isinstance(error,CloudOperationError) else ('扫描超过 10 分钟，请分批选择较小的文件夹；尚未创建下载任务。' if isinstance(error,TimeoutError) else '读取子目录失败，请检查网络后重试；尚未创建下载任务。')
             plan['items']=[];plan['directories']=[]
+        finally:
+            for task in [joined,*workers]:task.cancel()
+            await asyncio.gather(joined,*workers,return_exceptions=True)
 
     @staticmethod
     def check_disk(destination, required):

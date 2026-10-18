@@ -1,7 +1,7 @@
 // The native host owns window visibility. Hiding never shuts down the backend.
 (()=>{
  const native=window.chrome?.webview;
- let lastPreferences='',lastRead=0;
+ let lastPreferences='',lastRead=0,lastLocation='',restorePending=null;
  const milestones=new Set();
  window.cloudDockBackground=false;
  function send(value){native?.postMessage(value);}
@@ -16,6 +16,12 @@
  refreshState=async function(){
   lastRead=Date.now();await originalRefresh();
   if(!live)return;preferences();
+  if(restorePending&&!live.initializing){
+   const r=restorePending;restorePending=null;state.provider=r.provider;
+   if(r.view==='files')localGo(r.provider,live.providers[r.provider]?.path||'/');else changeView(r.view);
+  }
+  const location=JSON.stringify([state.view,state.provider]);
+  if(location!==lastLocation){lastLocation=location;send({type:'uiLocation',view:state.view,provider:state.provider});}
   if(live.initialization_error&&state.view==='files'){
    const host=$('#fileList');host.replaceChildren();
    const box=document.createElement('div');box.className='empty';
@@ -39,6 +45,7 @@
  native?.addEventListener('message',event=>{
   const message=event.data;
   if(message?.type==='windowVisibility')visibility(!message.visible);
+  if(message?.type==='restoreLocation'&&['baidu','quark'].includes(message.provider)&&['files','transfers','recent','backups','trash'].includes(message.view)){restorePending=message;refreshState();}
   if(message?.type==='openSettings')settings();
   if(message?.type==='qaBridgeProbe'){
    (async()=>{
@@ -46,7 +53,7 @@
     try{
      await api('desktop_preferences',{close_to_tray:live?.close_to_tray!==false});result.action=true;
      const stateResponse=await fetch(apiUrl('api/state'));const snapshot=await stateResponse.json();
-     result.state=stateResponse.ok&&snapshot.version==='0.6.4'&&!snapshot.initializing;
+     result.state=stateResponse.ok&&snapshot.version==='0.6.7'&&!snapshot.initializing;
      const forbidden=await fetch(apiUrl('api/selection'));result.pickerBlocked=!forbidden.ok;
     }catch{}finally{send(result);}
    })();

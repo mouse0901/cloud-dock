@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Net;
 using System.Text;
@@ -44,8 +44,12 @@ static class Program {
     }
 }
 
-class CloudWindow:Form {
-    readonly WebView2 view=new WebView2();
+partial class CloudWindow:Form {
+    WebView2 view=new WebView2();
+    readonly BrowserRecovery recovery=new BrowserRecovery();
+    bool browserBroken,recovering;
+    int readyCount;
+    string lastView,lastProvider;
     readonly MotionSplash loading;
     readonly NotifyIcon tray=new NotifyIcon();
     readonly JavaScriptSerializer json=new JavaScriptSerializer();
@@ -80,7 +84,7 @@ class CloudWindow:Form {
     public CloudWindow(string folder,bool startup=false){
         startupLaunch=startup;startupRegistration=new StartupRegistration(Path.Combine(folder,"CloudDock.exe"));
         root=folder;url=Environment.GetEnvironmentVariable("CLOUD_DOCK_URL");nativeKey=Environment.GetEnvironmentVariable("CLOUD_DOCK_NATIVE_KEY");
-        Text="云屿 Cloud Dock · 0.6.4";ClientSize=new Size(1180,760);MinimumSize=new Size(980,680);StartPosition=FormStartPosition.CenterScreen;
+        Text="云屿 Cloud Dock · 0.6.7";ClientSize=new Size(1180,760);MinimumSize=new Size(980,680);StartPosition=FormStartPosition.CenterScreen;
         Icon=new Icon(Path.Combine(root,"assets","branding","cloud-dock.ico"));
         ReadPreferences();
         if(startupLaunch){WindowState=FormWindowState.Minimized;ShowInTaskbar=false;}
@@ -118,6 +122,7 @@ class CloudWindow:Form {
         Resize+=(s,e)=>SetForegroundState(Visible && WindowState!=FormWindowState.Minimized);
         clipboardTimer.Interval=200;clipboardTimer.Tick+=(s,e)=>ReadClipboardLink();
         Activated+=(s,e)=>ScheduleClipboard();
+        InitializeFeedback();
         FormClosing+=OnClosing;
         FormClosed+=(s,e)=>{clipboardTimer.Stop();clipboardTimer.Dispose();watchdog.Stop();watchdog.Dispose();if(activationWait!=null)activationWait.Unregister(null);if(exitWait!=null)exitWait.Unregister(null);tray.Visible=false;tray.Dispose();};
     }
@@ -141,9 +146,10 @@ class CloudWindow:Form {
         try{
             string text=Clipboard.ContainsText(TextDataFormat.UnicodeText)?Clipboard.GetText(TextDataFormat.UnicodeText):"";
             clipboardObserved=true;clipboardSequence=sequence;
-            var link=ShareLink.Parse(text);
-            if(clipboardHistory.Accept(link))Send(new {type="clipboardShare",provider=link.provider,url=link.url,password=link.password});
-            else if(link==null)Send(new {type="clipboardClear"});
+            var links=ShareLink.ParseAll(text);var fresh=new List<ShareLink>();
+            foreach(var link in links)if(clipboardHistory.Accept(link))fresh.Add(link);
+            if(fresh.Count>0)Send(new {type="clipboardShares",links=fresh});
+            else if(links.Count==0)Send(new {type="clipboardClear"});
         }catch(ExternalException){if(++clipboardRetries<4)clipboardTimer.Start();}
     }
     void ReadPreferences(){
@@ -188,7 +194,30 @@ class CloudWindow:Form {
             Timing("navigation_completed");
             if(!e.IsSuccess && !closing)loading.ShowFailure("界面未能加载，请重试。",true);
         };
-        view.CoreWebView2.ProcessFailed+=(s,e)=>{if(!closing){ready=false;loading.Visible=true;loading.BringToFront();loading.ShowFailure("界面连接中断，请重试。",true);}};
+        view.CoreWebView2.ProcessFailed+=OnBrowserFailure;
+    }
+    async void OnBrowserFailure(object sender,CoreWebView2ProcessFailedEventArgs e){
+        string kind=e.ProcessFailedKind.ToString(),action=BrowserRecovery.Action(kind);
+        Timing("webview_failure_"+kind);
+        // Enum values and numeric exit code only; never dump crash memory.
+        try{
+            var file=Path.Combine(Program.Data,"work","webview-recovery.jsonl");
+            if(File.Exists(file)&&new FileInfo(file).Length>65536)File.Delete(file);
+            File.AppendAllText(file,json.Serialize(new {at=DateTime.UtcNow.ToString("o"),kind=kind,exit=e.ExitCode,action=action})+Environment.NewLine);
+        }catch{}
+        if(closing||action=="ignore")return;
+        if(action=="recreate")browserBroken=true;
+        ready=false;loading.Visible=true;loading.BringToFront();
+        if(recovering)return;
+        if(!recovery.Allow(DateTime.UtcNow)){
+            loading.ShowFailure("界面多次中断，后台任务仍保留。请点击重试恢复界面。",true);return;
+        }
+        recovering=true;loading.Prepare();
+        try{
+            await Task.Delay(350);
+            while(setupRunning&&!closing)await Task.Delay(50);
+            if(!closing)await Setup();
+        }finally{recovering=false;}
     }
     bool Trusted(string source){return NativeBridgePolicy.IsPage(source);}
     async void ServeLocalAsset(object sender,CoreWebView2WebResourceRequestedEventArgs e){
@@ -269,6 +298,11 @@ class CloudWindow:Form {
         if(setupRunning||closing)return;setupRunning=true;navigationStarted=Program.Clock.ElapsedMilliseconds;
         loading.Visible=true;loading.BringToFront();loading.Prepare();
         try{
+            if(browserBroken){
+                var old=view;Controls.Remove(old);old.Dispose();
+                view=new WebView2();view.Dock=DockStyle.Fill;Controls.Add(view);loading.BringToFront();
+                browserTask=null;browserBroken=false;
+            }
             // Full browser/controller initialization overlaps the backend.
             if(browserTask==null||browserTask.IsFaulted)browserTask=InitializeBrowser();
             if(String.IsNullOrEmpty(url) && (backendTask==null||backendTask.IsFaulted))backendTask=StartBackend();
@@ -331,10 +365,20 @@ class CloudWindow:Form {
         try{
             var data=json.Deserialize<Dictionary<string,object>>(e.WebMessageAsJson);
             string type=data.ContainsKey("type")?Convert.ToString(data["type"]):"";
+            if(type=="uiLocation"){
+                string location=data.ContainsKey("view")?Convert.ToString(data["view"]):"";
+                string provider=data.ContainsKey("provider")?Convert.ToString(data["provider"]):"";
+                if((provider=="baidu"||provider=="quark") && (location=="files"||location=="transfers"||location=="recent"||location=="backups"||location=="trash")){
+                    lastView=location;lastProvider=provider;
+                }
+                return;
+            }
             id=data.ContainsKey("id")?Convert.ToString(data["id"]):"";
             if(type=="qaBridgeResult" && !String.IsNullOrEmpty(Environment.GetEnvironmentVariable("CLOUD_DOCK_QA_LIFECYCLE"))){qaBridgeReply=data;return;}
             if(type=="uiReady"){
-                ready=true;navigationStarted=0;Timing("shell_interactive");loading.SetActive(false);loading.Visible=false;
+                ready=true;readyCount++;navigationStarted=0;Timing("shell_interactive");loading.SetActive(false);loading.Visible=false;
+                if(lastView!=null&&pendingFeedback==null)Send(new {type="restoreLocation",view=lastView,provider=lastProvider});
+                if(pendingFeedback!=null){Send(new {type="feedbackOpen",item=pendingFeedback});pendingFeedback=null;}
                 SetForegroundState(Visible && WindowState!=FormWindowState.Minimized);
                 if(openSettingsPending){Send(new {type="openSettings"});openSettingsPending=false;}
                 ScheduleClipboard();
@@ -377,7 +421,11 @@ class CloudWindow:Form {
                 }catch{Send(new {type="startupState",error="无法修改开机启动设置，请检查程序位置或 Windows 权限。"});}return;
             }
             if(type=="openWindowsStartup"){Process.Start(new ProcessStartInfo("ms-settings:startupapps"){UseShellExecute=true});return;}
-            if(type=="completionSound"){if(!picking)System.Media.SystemSounds.Asterisk.Play();return;}
+            if(type=="openAuthor"){Process.Start(new ProcessStartInfo("https://space.bilibili.com/3546747290782061"){UseShellExecute=true});return;}
+            if(type=="previewFeedbackSound"){
+                int volume; if(!Int32.TryParse(Field(data,"volume"),out volume))return;
+                PlayFeedbackSound(Field(data,"kind"),volume);return;
+            }
             if(type=="dropFiles"){
                 if(id.Length>32||e.AdditionalObjects==null||e.AdditionalObjects.Count<1||e.AdditionalObjects.Count>500)return;
                 var dropped=new List<string>();
@@ -418,7 +466,7 @@ class CloudWindow:Form {
             if(!String.IsNullOrEmpty(url))await Task.WhenAny(Post("api/action",new {action="shutdown"}),Task.Delay(8000));
             if(backend!=null && !backend.HasExited)await Task.WhenAny(Task.Run(()=>backend.WaitForExit()),Task.Delay(8000));
         }catch{}
-        if(backend!=null && !backend.HasExited){closing=false;closeToTray=true;Text="云屿 Cloud Dock · 0.6.4";RestoreWindow(false);MessageBox.Show(this,"后台仍在保存或核对任务。请稍后再次退出；安装程序不会替换正在使用的文件。","云屿");return;}
+        if(backend!=null && !backend.HasExited){closing=false;closeToTray=true;Text="云屿 Cloud Dock · 0.6.7";RestoreWindow(false);MessageBox.Show(this,"后台仍在保存或核对任务。请稍后再次退出；安装程序不会替换正在使用的文件。","云屿");return;}
         done=true;tray.Visible=false;Timing("exit_saved");Close();
     }
     async Task RunQa(){
@@ -465,7 +513,7 @@ class CloudWindow:Form {
             await view.CoreWebView2.ExecuteScriptAsync("document.querySelector('#sheet').close();settings();document.querySelector('#clipboardSwitch').click();");await Task.Delay(500);
             results["release_controls"]=await view.CoreWebView2.ExecuteScriptAsync("Boolean(document.querySelector('#releaseNotes')&&document.querySelector('#exportDiagnostics'))")=="true";
             var diagnostic=await Post("api/action",new {action="diagnostics"});var diagnosticReport=(Dictionary<string,object>)diagnostic["report"];
-            results["diagnostics_allowlist"]=Convert.ToString(diagnosticReport["version"])=="0.6.4"&&!json.Serialize(diagnostic).Contains("download_dir");
+            results["diagnostics_allowlist"]=Convert.ToString(diagnosticReport["version"])=="0.6.7"&&!json.Serialize(diagnostic).Contains("download_dir");
             results["startup_setting"]=await view.CoreWebView2.ExecuteScriptAsync("Boolean(document.querySelector('#startupSwitch') && !document.querySelector('#startupSwitch').disabled)")=="true";
             results["clipboard_setting_off"]=await view.CoreWebView2.ExecuteScriptAsync("Boolean(live.clipboard_links===false && document.querySelector('#clipboardSwitch').getAttribute('aria-checked')==='false')")=="true";
             await view.CoreWebView2.ExecuteScriptAsync("document.querySelector('#clipboardSwitch').click();");await Task.Delay(500);
@@ -506,7 +554,7 @@ class CloudWindow:Form {
             await Task.Delay(250);
             if(!String.IsNullOrEmpty(capture))using(var file=File.Create(capture+".transfers.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,file);
             await view.CoreWebView2.ExecuteScriptAsync("settings();document.querySelector('[data-settings-tab=storage]').click();");
-            results["settings_categories"]=await view.CoreWebView2.ExecuteScriptAsync("document.querySelectorAll('.settings-nav button').length===5 && !document.querySelector('[data-settings-panel=storage]').hidden && document.querySelector('[data-settings-panel=general]').hidden")=="true";
+            results["settings_categories"]=await view.CoreWebView2.ExecuteScriptAsync("document.querySelectorAll('.settings-nav button').length===6 && !document.querySelector('[data-settings-panel=storage]').hidden && document.querySelector('[data-settings-panel=general]').hidden")=="true";
             await Task.Delay(250);
             if(!String.IsNullOrEmpty(capture))using(var file=File.Create(capture+".storage.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,file);
             await view.CoreWebView2.ExecuteScriptAsync("document.querySelector('#sheet').close();document.querySelector('[data-capacity=baidu]').click();");
@@ -522,8 +570,67 @@ class CloudWindow:Form {
                 File.WriteAllText(lifecycle+".productivity.json",await view.CoreWebView2.ExecuteScriptAsync("window.qaProductivity||{timeout:true}"));
                 if(!String.IsNullOrEmpty(capture))using(var file=File.Create(capture+".productivity.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,file);
             }
+            string linksQa=Path.Combine(root,"tests","qa_links.js");
+            if(File.Exists(linksQa)){
+                await view.CoreWebView2.ExecuteScriptAsync(File.ReadAllText(linksQa,Encoding.UTF8));
+                var linksWait=Stopwatch.StartNew();
+                while(linksWait.ElapsedMilliseconds<10000 && await view.CoreWebView2.ExecuteScriptAsync("Boolean(window.qaLinks)")!="true")await Task.Delay(100);
+                File.WriteAllText(lifecycle+".links.json",await view.CoreWebView2.ExecuteScriptAsync("window.qaLinks||{timeout:true}"));
+                if(!String.IsNullOrEmpty(capture))using(var file=File.Create(capture+".download.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,file);
+                await view.CoreWebView2.ExecuteScriptAsync("document.querySelector('#sheet').close();");
+            }
+            string feedbackQa=Path.Combine(root,"tests","qa_feedback.js");
+            if(File.Exists(feedbackQa)){
+                await view.CoreWebView2.ExecuteScriptAsync(File.ReadAllText(feedbackQa,Encoding.UTF8));
+                var feedbackWait=Stopwatch.StartNew();
+                while(feedbackWait.ElapsedMilliseconds<10000 && await view.CoreWebView2.ExecuteScriptAsync("Boolean(window.qaFeedback)")!="true"){
+                    if(await view.CoreWebView2.ExecuteScriptAsync("Boolean(window.qaFeedbackAboutReady)")=="true"){
+                        if(!String.IsNullOrEmpty(capture))using(var image=File.Create(capture+".author.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+                        await view.CoreWebView2.ExecuteScriptAsync("window.qaFeedbackAboutReady=false");
+                    }
+                    await Task.Delay(50);
+                }
+                await Task.Delay(300);
+                results["custom_sound_native_route"]=qaSoundKind=="upload"&&qaSoundVolume==22;
+                var feedbackSettings=await Post("api/action",new {action="feedback_preferences",preferences=new {download_sound=false,sound_volume=18,quiet_enabled=true,quiet_start="22:00",quiet_end="08:00"}});
+                var feedbackPoll=await Post("api/action",new {action="feedback_poll",ack=new string[0]});
+                var fp=(Dictionary<string,object>)feedbackPoll["preferences"];
+                results["native_feedback_preferences"]=!Bool(fp,"download_sound",true)&&Convert.ToInt32(fp["sound_volume"])==18&&Bool(fp,"quiet_enabled",false);
+                var onDisk=json.Deserialize<Dictionary<string,object>>(File.ReadAllText(Path.Combine(Program.Data,"preferences.json")));
+                results["feedback_settings_persisted"]=onDisk.ContainsKey("feedback");
+                if(!String.IsNullOrEmpty(capture))using(var card=new FeedbackPopup("3 项下载完成","",false,()=>{}))using(var bitmap=new Bitmap(card.Width,card.Height)){
+                    card.DrawToBitmap(bitmap,new Rectangle(0,0,card.Width,card.Height));bitmap.Save(capture+".desktop-notice.png",System.Drawing.Imaging.ImageFormat.Png);
+                }
+                File.WriteAllText(lifecycle+".feedback.json",await view.CoreWebView2.ExecuteScriptAsync("window.qaFeedback||{timeout:true}"));
+                if(!String.IsNullOrEmpty(capture))using(var image=File.Create(capture+".feedback.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+                await view.CoreWebView2.ExecuteScriptAsync("document.querySelector('#sheet').close();");
+            }
+            if(File.Exists(Path.Combine(root,"tests","qa_stability.js")))await RunStabilityQa(lifecycle);
             File.WriteAllText(lifecycle,json.Serialize(results));
         }
         RequestExit();
+    }
+    async Task RunStabilityQa(string file){
+        await view.CoreWebView2.ExecuteScriptAsync(File.ReadAllText(Path.Combine(root,"tests","qa_stability.js"),Encoding.UTF8));
+        var wait=Stopwatch.StartNew();
+        while(wait.ElapsedMilliseconds<25000 && await view.CoreWebView2.ExecuteScriptAsync("Boolean(window.qaStability)")!="true")await Task.Delay(100);
+        File.WriteAllText(file+".stability.json",await view.CoreWebView2.ExecuteScriptAsync("window.qaStability||{timeout:true}"));
+        var result=new Dictionary<string,object>();
+        int backendId=backend.Id;
+        foreach(string method in new[]{"Page.crash","Browser.crash"}){
+            await view.CoreWebView2.ExecuteScriptAsync("window.chrome.webview.postMessage({type:'uiLocation',view:'transfers',provider:'baidu'})");
+            await Task.Delay(150);int before=readyCount;
+            var crash=view.CoreWebView2.CallDevToolsProtocolMethodAsync(method,"{}");
+            // A crashed process cannot return a CDP result; observe any task fault.
+            crash.ContinueWith(t=>{var ignored=t.Exception;},TaskContinuationOptions.OnlyOnFaulted);
+            await Task.WhenAny(crash,Task.Delay(1000));
+            wait.Restart();while(wait.ElapsedMilliseconds<20000 && (!ready || readyCount<=before))await Task.Delay(100);
+            result[method+"_recovered"]=ready && readyCount>before;
+            result[method+"_backend_retained"]=backend.Id==backendId && !backend.HasExited;
+            if(!ready || readyCount<=before)break;
+            await Task.Delay(1200);
+            result[method+"_location_retained"]=await view.CoreWebView2.ExecuteScriptAsync("state.view==='transfers'")=="true";
+        }
+        File.WriteAllText(file+".recovery.json",json.Serialize(result));
     }
 }

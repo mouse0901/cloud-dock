@@ -1,6 +1,5 @@
-@property --theme-radius {syntax:'<length>';inherits:true;initial-value:0px;}
 ::view-transition-group(root),::view-transition-old(root),::view-transition-new(root){animation:none;mix-blend-mode:normal;}
 ::view-transition-old(root){z-index:1;}
-::view-transition-new(root){z-index:2;mask-image:radial-gradient(circle at var(--theme-x) var(--theme-y),#000 calc(var(--theme-radius) - 60px),transparent var(--theme-radius));}
+::view-transition-new(root){z-index:2;mask-image:radial-gradient(circle closest-side,#000 94%,transparent 100%);mask-repeat:no-repeat;mask-size:300vmax 300vmax;mask-position:center;}
 ::view-transition{pointer-events:none;}
 @media(prefers-reduced-motion:reduce){::view-transition-new(root){mask-image:none;}}

@@ -24,6 +24,10 @@ class NativeBridgePolicyTests {
         Check(NativeBridgePolicy.Allows(bridge+"api/thumbnail/"+new string('a',64),"GET",""),"image request");
         Check(!NativeBridgePolicy.Allows(bridge+"api/thumbnail/../../data","GET",page),"thumbnail traversal");
         Check(!NativeBridgePolicy.Allows(bridge+"api/thumbnail/"+new string('a',64),"POST",page),"thumbnail read only");
+        Check(NativeBridgePolicy.Allows(bridge+"api/media/"+new string('a',64),"GET",""),"media request");
+        Check(!NativeBridgePolicy.Allows(bridge+"api/media/"+new string('a',64),"GET","https://evil.example"),"foreign media origin");
+        Check(!NativeBridgePolicy.Allows(bridge+"api/media/../../data","GET",page),"media traversal");
+        Check(!NativeBridgePolicy.Allows(bridge+"api/media/"+new string('a',64),"POST",page),"media read only");
         Console.WriteLine("PASS "+count+" native bridge policy checks");
     }
 }

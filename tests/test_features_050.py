@@ -114,7 +114,7 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
   self.f=Features(self.bridge);self.ops=self.f.ops['baidu'];self.ops.stamp=lambda:'session';self.ops.identity_stamp='session';self.f.accounts['baidu']='account'
  async def asyncTearDown(self):await self.f.close();await self.client.aclose();self.tmp.cleanup()
  def job(self,state='downloading'):
-  return SimpleNamespace(item=CloudFile('f','baidu','/safe.txt',size=4,revision='v'),state=state,done=2,total=4,error='',requires_restart=False,destination=self.root/'downloads',target=None)
+  return SimpleNamespace(item=CloudFile('f','baidu','/safe.txt',size=4,revision='v'),state=state,done=2,total=4,error='',requires_restart=False,destination=self.root/'downloads',target=None,pause=AsyncMock(),cancel=AsyncMock())
  async def test_incomplete_task_survives_restart_without_credentials(self):
   j=self.job();self.panel.jobs=[j];self.f.capture('baidu');self.panel.jobs=[]
   rows=self.f.archived();self.assertEqual(rows[0]['status'],'paused');self.assertTrue(rows[0]['archived'])

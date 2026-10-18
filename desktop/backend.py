@@ -30,6 +30,9 @@ class Bridge:
         self.experience=Experience(self)
         from desktop.productivity import Productivity
         self.productivity=Productivity(self)
+        from desktop.share_workspace import ShareWorkspace
+        from desktop.download_dialog import DownloadDialog
+        self.shares=ShareWorkspace(self);self.download_dialog=DownloadDialog(self)
         for p in self.panels.values():p.set_download_root(self.workspace.settings['download_dir'])
     def create_panels(self):
         # Import the former Flet controllers off the first-response path.
@@ -67,10 +70,12 @@ class Bridge:
         if self.updates:await self.updates.close()
         await self.productivity.close()
         await self.experience.close()
+        await self.download_dialog.close()
         if self.features:await self.features.close()
         for t in self.startups:t.cancel()
         await asyncio.gather(*self.startups,return_exceptions=True)
         await asyncio.gather(*(p.shutdown() for p in self.panels.values()),return_exceptions=True)
+        await self.shares.close()
     def context(self,p):
         return f'{p.generation}:{p.list_generation}:{p.path}:{p.page_index}:{bool(getattr(p,"share",None))}'
     def files(self,p):
@@ -113,8 +118,8 @@ class Bridge:
                 'providers':providers,'tasks':self.tasks(),'download_dir':self.workspace.settings['download_dir'],
                 'favorites':self.experience.favorites() if self.features else [],
                 'file_view':{k:self.workspace.settings.get(k,v) for k,v in {'view':'list','sort_field':'name','sort_desc':False}.items()},
-                'update':self.updates.snapshot() if self.updates else {'status':'initializing','current':'0.6.4','enabled':False},
-                'version':'0.6.4','migration_notice':(self.workspace.data_dir/'migration.json').exists(),'theme':self.workspace.settings.get('theme','light'),'reduced':self.workspace.settings.get('reduce_motion',False)}
+                'update':self.updates.snapshot() if self.updates else {'status':'initializing','current':'0.6.7','enabled':False},
+                'version':'0.6.7','migration_notice':(self.workspace.data_dir/'migration.json').exists(),'theme':self.workspace.settings.get('theme','light'),'reduced':self.workspace.settings.get('reduce_motion',False)}
     def selected_paths(self,key,kind):
         value=self.selections.pop(key,None)
         if not value or time.monotonic()-value['at']>300 or value['kind']!=kind:raise UiError('文件选择已过期，请重新选择。')
@@ -125,7 +130,28 @@ class Bridge:
         self.selections={k:v for k,v in self.selections.items() if time.monotonic()-v['at']<300}
         key=secrets.token_hex(24);self.selections[key]={'kind':kind,'paths':paths,'at':time.monotonic()};return {'selection':key,'count':len(paths)}
     async def action(self,d):
+        try:return await self._action(d)
+        except Exception as error:
+            from app.operation_diagnostics import public_error
+            if isinstance(error,UiError):raise
+            raise UiError(public_error(d.get('action'),error)) from None
+
+    async def _action(self,d):
         action=d.get('action')
+        if isinstance(action,str) and action.startswith('feedback_'):
+            if not self.features:return {'events':[],'preferences':{},'quiet':True}
+            feedback=self.features.feedback
+            if action=='feedback_poll':return feedback.poll(d.get('ack',[]))
+            if action=='feedback_preferences':
+                try:return {'preferences':await feedback.configure(d.get('preferences'))}
+                except ValueError as e:raise UiError(str(e)) from None
+            if action=='feedback_read':feedback.read();return {}
+            if action=='feedback_clear':feedback.read(clear=True);return {}
+            raise UiError('未识别的通知操作。')
+        if isinstance(action,str) and action.startswith(('links_','download_')) and action!='download_directory':
+            from app.cloud_operations import CloudOperationError
+            try:return await (self.shares if action.startswith('links_') else self.download_dialog).action(d)
+            except CloudOperationError as error:raise UiError(str(error)) from None
         if isinstance(action,str) and action.startswith('tools_'):
             from app.cloud_operations import CloudOperationError
             try:return await self.productivity.action(d)
@@ -259,13 +285,14 @@ class Handler(BaseHTTPRequestHandler):
     def checked(self):
         if self.headers.get('Host')!=self.server.authority:return False
         return self.path.startswith('/'+self.server.token+'/')
-    def call(self,coro):
+    def call(self,coro,operation='state'):
         future=asyncio.run_coroutine_threadsafe(coro,self.server.loop)
         try:return future.result(95)
         except UiError as e:raise e
-        except Exception:
+        except Exception as error:
             future.cancel()
-            raise UiError('操作未完成，请重试或检查账号连接。') from None
+            from app.operation_diagnostics import public_error
+            raise UiError(public_error(operation,error)) from None
     def do_GET(self):
         if not self.checked():return self.respond(404,{'error':'Not found'})
         path=urlsplit(self.path).path[len(self.server.token)+2:]
@@ -288,6 +315,7 @@ class Handler(BaseHTTPRequestHandler):
         if path=='health':return self.respond(200,{'ok':True})
         if path=='cloud-dock.ico':return self.respond(200,(ROOT/'assets/branding/cloud-dock.ico').read_bytes(),'image/x-icon')
         allowed={'':'index.html','index.html':'index.html','app.js':'app.js','prototype.css':'prototype.css','desktop.css':'desktop.css','theme-reveal.js':'theme-reveal.js','theme-reveal.css':'theme-reveal.css','cloud-dock.png':'cloud-dock.png','features.js':'features.js','features.css':'features.css','lifecycle.js':'lifecycle.js','clipboard.js':'clipboard.js','sync.js':'sync.js','sync.css':'sync.css','startup.js':'startup.js','update.js':'update.js','update.css':'update.css','experience.js':'experience.js','experience.css':'experience.css','productivity.js':'productivity.js','productivity.css':'productivity.css'}
+        allowed.update({'feedback.js':'feedback.js','feedback.css':'feedback.css','share-workspace.js':'share-workspace.js','share-workspace.css':'share-workspace.css'})
         if path not in allowed:return self.respond(404,{'error':'Not found'})
         file=ROOT/'desktop/web'/allowed[path]
         qa=os.environ.get('CLOUD_DOCK_QA_TIMINGS')
@@ -322,7 +350,7 @@ class Handler(BaseHTTPRequestHandler):
             if path=='api/selection':
                 if not hmac.compare_digest(self.headers.get('X-Native-Key',''),self.server.native_key):return self.respond(403,{'error':'Native selection required'})
                 result=self.call(self.server.bridge.selection(d))
-            elif path=='api/action':result=self.call(self.server.bridge.action(d))
+            elif path=='api/action':result=self.call(self.server.bridge.action(d),d.get('action'))
             else:return self.respond(404,{'error':'Not found'})
             self.respond(200,{'ok':True,**result})
         except (UiError,ValueError,TimeoutError) as e:self.respond(400,{'error':str(e) if isinstance(e,UiError) else '请求格式无效。'})
