@@ -1,6 +1,6 @@
 {
   "product": "Cloud Dock",
-  "version": "0.6.8",
-  "channel": "beta",
+  "version": "1.0.0",
+  "channel": "stable",
   "update_schema": 1
 }

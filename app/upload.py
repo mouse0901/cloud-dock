@@ -118,7 +118,7 @@ class UploadJob:
 
     async def run(self):
         if self.state=='cancelled': return None
-        self._stop_reading.clear()
+        self._stop_reading.clear();self._pause_requested=False
         self._task=asyncio.current_task();self._started=time.monotonic();self.error='';self.error_code=''
         try:
             self.guard()
@@ -141,7 +141,8 @@ class UploadJob:
             self._stop_reading.set()
             if self.commit_started:
                 self.state='failed';self.error_code='upload_uncertain';self.error='上传提交结果待核对，请重新连接后检查目标目录。'
-            else:self.state='cancelled'
+            else:self.state='paused' if getattr(self,'_pause_requested',False) else 'cancelled'
+            self.speed=0.0
             raise
         except UploadError as exc:
             self.state='failed';self.error_code=exc.code;self.error=str(exc)
@@ -155,7 +156,17 @@ class UploadJob:
             self._task=None
             await self.notify(force=True)
 
+    async def pause(self):
+        if self.commit_started or self.state in ('completed','cancelled'):return False
+        self._pause_requested=True;self._stop_reading.set()
+        if self._task and self._task is not asyncio.current_task():
+            self._task.cancel();await asyncio.gather(self._task,return_exceptions=True)
+        else:self.state='paused'
+        self.speed=0.0
+        return True
+
     async def cancel(self):
+        self._pause_requested=False
         if self.state=='completed':return
         self._stop_reading.set()
         if self._task and self._task is not asyncio.current_task():

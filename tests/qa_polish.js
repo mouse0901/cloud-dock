@@ -1,0 +1,42 @@
+(async()=>{
+ const r={},original=api,oldRefresh=refreshState,calls=[],delay=ms=>new Promise(x=>setTimeout(x,ms));let quickCalls=0;
+ try{
+  $('#sheet').close();await delay(40);document.body.classList.remove('dark');
+  const files=[{id:'folder',name:'项目交付',path:'/项目交付',type:'folder',size:0},{id:'file',name:'设计说明.pdf',path:'/设计说明.pdf',type:'pdf',size:1024}];
+  for(const p of Object.values(live.providers))Object.assign(p,{connected:true,session:'polish-A',context:'polish-context',busy:false,share:false,path:'/',page:0,files,account_name:'创作账号'});
+  const rule={id:'sync-polish',provider:'baidu',name:'创作项目同步',mode:'two_way',kind:'folder',enabled:true,local_root:'H:\\项目',remote_root:'/项目',last:1760000000,last_success:1760000000,status:'有 1 项冲突',issues:[]};
+  api=async(action,d={})=>{calls.push([action,d]);
+   if(action==='browse_view')return {session:d.session,context:'polish-context',files,path:d.path,page:0};
+   if(action==='profiles_list')return {providers:Object.fromEntries(['baidu','quark'].map(p=>[p,{active:'default',rows:[{id:'default',name:'创作账号',verified:true}]}]))};
+   if(action==='inbox_list')return {rows:[]};if(action==='links_parse')return {links:[{provider:'quark',url:'https://pan.quark.cn/s/example',password:'W2pz'}]};
+   if(action==='sync_detail')return {rule,issues:[{rel:'设计说明.pdf',kind:'conflict',message:'两端均已修改',local:{fp:{size:10}},remote:{size:20}}],events:[],queued:0};
+   if(action==='sync_changes')return {at:1760000000,enabled:true,rows:[{rel:'设计说明.pdf',action:'conflict',local:{fp:{size:10}},remote:{size:20}}]};
+   if(action==='download_prepare')return {token:'download-polish',state:'ready',count:1,bytes:1024,folders:0,destination:'H:\\下载',error:''};
+   if(action==='download_quick'){quickCalls++;return {count:1};}if(action==='download_cancel')return {};
+   if(action==='download_preferences')return {quick:d.quick};if(action==='transfers_control')return {changed:d.ids.length,skipped:0,errors:[]};return {};
+  };
+  refreshState=async()=>{updateLiveControls();if(state.view==='transfers')renderTasks();};
+  await go('baidu','/');state.mode='list';render();
+  r.single_links_entry=$('#linkInbox').hidden&&$('#openLinks').textContent.trim()==='链接';
+  const ab=$('.provider-entry .provider-account');ab.click();await delay(30);r.adjacent_account_access=!!$('[data-profile-provider=baidu]')&&!ab.closest('.provider');$('#sheet').close();await delay(30);
+  window.openShareWorkspace();$('#shareInput').value='https://pan.quark.cn/s/example?pwd=W2pz';$('#sharePassword').value='W2pz';$('#savedLinks').click();await delay(20);r.saved_links_inside_hub=!!$('#linksPaste')&&!!$('#inboxFilter');$('#linksPaste').click();await delay(220);r.link_draft_preserved=$('#shareInput').value.includes('example')&&$('#sharePassword').value==='W2pz';$('#sheet').close();await delay(30);
+  const dt=new DataTransfer();dt.items.add(new File(['qa'],'demo.txt'));const row=$('[data-id=folder]');row.dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer:dt}));r.drop_target_highlight=row.classList.contains('drop-target');r.drop_destination=($('#uploadDrop').textContent.includes('/项目交付')&&$('#uploadDrop').textContent.includes('创作账号'));document.dispatchEvent(new DragEvent('dragleave',{bubbles:true}));
+  live.quick_download=true;await queue([files[1]]);await delay(40);r.quick_uses_guarded_plan=quickCalls===1&&calls.some(x=>x[0]==='download_prepare');r.quick_closes_after_queue=!$('#sheet').open;
+  await queue([files[1]],{choose:true});await delay(30);r.save_as_bypasses_quick=quickCalls===1&&!!$('#downloadChoose');r.quick_option_opt_in=$('#downloadQuick').disabled;$('#downloadRemember').click();r.quick_requires_default=!$('#downloadQuick').disabled;$('#sheet').close();await delay(30);
+  await syncDetail(rule.id);r.sync_home=!!$('#syncHome');const home=$('#syncHome');$('#syncChanges').click();await delay(30);r.sync_changes_in_place=$('#syncHome')===home&&home.hidden&&!!$('#reviewRows');$('#reviewBack').click();r.sync_back_preserves_dom=$('#syncHome')===home&&!home.hidden&&!$('#syncPane');
+  confirmSyncResolution(rule.id,{rel:'设计说明.pdf',kind:'conflict',local:{fp:{size:10}},remote:{size:20}},'local');r.conflict_has_confirmation=!!$('#syncResolveConfirm')&&home.hidden;$('#syncResolveBack').click();r.conflict_back_preserves_dom=$('#syncHome')===home&&!home.hidden;$('#sheet').close();await delay(30);
+  const base={provider:'baidu',direction:'download',priority:1,total:100000000,done:23000000,speed:4000000,error:'',target:'H:\\下载',restart:false,account_current:true,account_name:'创作账号'};
+  live.tasks=[{...base,id:'single-download',name:'项目素材.zip',status:'downloading'},{...base,id:'single-done',name:'设计说明.pdf',status:'completed',done:100000000,speed:0},{...base,id:'f1',name:'视频.mp4',group:'项目交付',group_id:'foldergroup',status:'downloading'},{...base,id:'f2',name:'说明.pdf',group:'项目交付',group_id:'foldergroup',status:'queued',done:0,speed:0},{...base,id:'upload-done',direction:'upload',name:'封面.png',status:'completed',path:'/作品/封面.png'},{...base,id:'upload-live',direction:'upload',name:'编辑工程.zip',status:'uploading'},{...base,id:'verify',name:'材质库.zip',status:'verifying',done:100000000,speed:0}];
+  changeView('transfers');$('[data-transfer-filter=all]').click();renderTasks();
+  r.single_not_double_card=!$('[data-task=single-download]').closest('.transfer-group');r.folder_starts_collapsed=$('.group-body').hidden;
+  r.primary_pause=!!$('[data-task=single-download] .task-actions>[data-command=pause]');r.cancel_in_more=!!$('[data-task=single-download] .task-more [data-command=cancel]');r.completed_open_primary=!!$('[data-task=single-done] .task-actions>[data-command=open]');r.verifying_explained=$('[data-task=verify] .task-status').textContent==='正在校验文件';
+  for(let i=0;i<3;i++)renderTasks();r.upload_complete_one_action=[...$('[data-task=upload-done] .task-actions').querySelectorAll('button')].filter(b=>b.textContent==='查看网盘位置').length===1;live.tasks.find(t=>t.id==='upload-live').priority=2;renderTasks();r.upload_pause_not_duplicated=$$('[data-task=upload-live] [data-extra=pause]').length===1;const more=$('[data-task=single-download] .task-more');more.open=true;renderTasks();r.more_retains_through_poll=more.open&&more.isConnected;more.querySelector('summary').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));r.escape_closes_more=!more.open;
+  const gm=$('.group-more');gm.open=true;await delay(30);const menu=gm.querySelector('.group-actions').getBoundingClientRect();r.group_menu_fits=menu.bottom<=innerHeight&&menu.right<=innerWidth&&menu.top>=0;gm.open=false;r.group_primary_visible=!!$('.group-primary:not([hidden])');r.transfer_no_overflow=$('#transferList').scrollWidth<=$('#transferList').clientWidth+1;
+  $('#transferList').scrollTop=0;window.qaPolishTransferReady=true;for(let n=0;n<100&&!window.qaPolishContinue;n++)await delay(50);
+  settings();r.settings_search_present=!!$('#settingsSearch');const input=$('#settingsSearch');input.value='声音';input.dispatchEvent(new Event('input'));r.settings_search_finds_sound=$$('#settingsResults .settings-hit').length>=2;$$('#settingsResults button').find(b=>b.textContent.includes('下载完成声音')).click();r.settings_search_jumps=$('[data-settings-panel=feedback]').hidden===false&&!!document.activeElement.closest('[data-settings-panel=feedback]');
+  input.value='zzzz不存在';input.dispatchEvent(new Event('input'));r.settings_empty_result=$('#settingsResults').textContent.includes('没有找到');input.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));r.settings_escape_clears=dialogOpen()&&input.value==='';
+  input.value='下载';input.dispatchEvent(new Event('input'));r.quick_setting_searchable=$$('#settingsResults button').some(b=>b.textContent.includes('直接下载'));
+  r.settings_no_overflow=$('.settings-panels').scrollWidth<=$('.settings-panels').clientWidth+1;settings();window.cloudDockFeedback.activate({view:'transfers',kind:'error'});r.notice_preserves_open_form=$('#sheet').open&&sheetKind==='settings';input.value='';$('#settingsSearch').value='下载';$('#settingsSearch').dispatchEvent(new Event('input'));
+  function dialogOpen(){return $('#sheet').open;}
+ }catch(e){r.error=String(e)+' '+e.stack;}finally{api=original;refreshState=oldRefresh;window.qaPolish=r;}
+})();

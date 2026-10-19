@@ -8,18 +8,19 @@
  footerHint.id='footerHint';crumb.replaceWith(footerHint);$('.location').append(crumb);
  const up=document.createElement('button');up.className='icon-button';up.id='upLevel';up.title='上一级（Alt + ↑）';up.setAttribute('aria-label','上一级');up.innerHTML='<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V4m-6 6 6-6 6 6"/></svg>';$('.history').append(up);
  up.onclick=()=>{const p=state.path.split('/').filter(Boolean);p.pop();go(state.provider,'/'+p.join('/'))};
- const pin=document.createElement('button');pin.id='pinFolder';pin.className='quiet';pin.textContent='固定此位置';$('#normalActions').append(pin);
+ const pin=document.createElement('button');pin.id='pinFolder';pin.className='quiet';pin.textContent='固定此位置';/* pin lives in context menu */;
  pin.onclick=async()=>{try{await api('favorite_toggle',{context:providerState()?.context});await refreshState();}catch(e){report(e)}};
  const favorites=document.createElement('div');favorites.id='favorites';$('[data-provider="quark"]').after(favorites);
  for(const provider of Object.keys(names)){
-  const button=document.createElement('button');button.className='capacity-button';button.dataset.capacity=provider;button.hidden=true;
-  $(`[data-provider="${provider}"]`).after(button);button.onclick=()=>showCapacity(provider);
+  const button=document.createElement('div');button.className='capacity-button';button.dataset.capacity=provider;button.hidden=true;
+  $(`[data-provider="${provider}"]`).after(button);
  }
  function capacityText(q){return q?.free!==undefined?'剩余 '+size(q.free)+(q.state==='stale'?' · 待刷新':''):q?.state==='loading'?'正在读取空间…':'空间暂时无法读取'}
  function showCapacity(provider){
-  sheetKind='capacity';sheet(names[provider]+' · 存储空间','<div id="capacityDetail"></div><button class="quiet" id="refreshCapacity">刷新空间</button>');
-  $('#sheet').dataset.capacity=provider;renderCapacityDetail();$('#refreshCapacity').onclick=async()=>{try{await api('capacity_refresh',{provider});await refreshState();renderCapacityDetail();}catch(e){report(e)}};
+  sheetKind='capacity';sheet(names[provider]+' · 存储空间','<div id="capacityDetail"></div><div class="long-actions"><button class="quiet" id="capacityBack">返回我的账号</button><button class="quiet" id="refreshCapacity">刷新空间</button></div>');
+  $('#capacityBack').onclick=()=>accounts();$('#sheet').dataset.capacity=provider;renderCapacityDetail();$('#refreshCapacity').onclick=async()=>{try{await api('capacity_refresh',{provider});await refreshState();renderCapacityDetail();}catch(e){report(e)}};
  }
+ window.cloudDockCapacity=showCapacity;
  function renderCapacityDetail(){const provider=$('#sheet').dataset.capacity,q=live?.capacities?.[provider];if(!$('#capacityDetail'))return;
   $('#capacityDetail').innerHTML=q?.total!==undefined?`<strong class="quota-number">${size(q.free)}<small>剩余空间</small></strong><div class="quota-track"><i style="width:${q.total?Math.min(100,100*q.used/q.total):100}%"></i></div><div class="quota-labels"><span>已用 ${size(q.used)}</span><span>总计 ${size(q.total)}</span></div><p>${q.over?'已超出容量 '+size(q.over)+'。':q.state==='stale'?'显示上次结果，稍后自动刷新。':'空间由网盘返回；回收站占用及释放时间以网盘为准。'}</p><small>更新时间：${q.checked?new Date(q.checked*1000).toLocaleString('zh-CN'):'—'}</small>`:`<p>${q?.state==='disconnected'?'账号未连接':capacityText(q)}</p><p>这不会影响目录浏览和已有传输。</p>`;
   $('#refreshCapacity').disabled=!!q?.loading||q?.state==='disconnected';
@@ -27,7 +28,7 @@
  function refreshExtras(){
   if(!live)return;
   if(!preferencesLoaded&&live.file_view){preferencesLoaded=true;state.mode=live.file_view.view;state.sort=live.file_view.sort_field;state.sortDesc=live.file_view.sort_desc;render();}
-  const key=JSON.stringify(live.capacities);if(key!==capacityKey){capacityKey=key;for(const provider of Object.keys(names)){const q=live.capacities?.[provider],b=$(`[data-capacity="${provider}"]`);b.hidden=!live.providers[provider]?.connected;b.textContent=capacityText(q);b.title='查看'+names[provider]+'存储空间';b.classList.toggle('quota-low',q?.total>0&&q.free/q.total<.05);}}
+  const key=JSON.stringify(live.capacities);if(key!==capacityKey){capacityKey=key;for(const provider of Object.keys(names)){const q=live.capacities?.[provider],b=$(`[data-capacity="${provider}"]`);b.hidden=!live.providers[provider]?.connected;b.textContent=capacityText(q);b.title='空间详情可在“我的账号”中查看';b.classList.toggle('quota-low',q?.total>0&&q.free/q.total<.05);}}
   if(sheetKind==='capacity')renderCapacityDetail();
   const fk=JSON.stringify(live.favorites);if(fk!==favoriteKey){favoriteKey=fk;favorites.innerHTML=live.favorites?.length?'<div class="nav-label">常用位置</div>'+live.favorites.map(f=>`<button class="favorite-place" data-favorite="${esc(f.id)}" title="${esc(names[f.provider]+' / '+f.path)}">${icon('folder')}<span>${esc(f.name)}</span><small>${f.provider==='baidu'?'百度':'夸克'}</small></button>`).join(''):'';favorites.querySelectorAll('button').forEach(b=>b.onclick=()=>{const f=live.favorites.find(x=>x.id===b.dataset.favorite);if(f)go(f.provider,f.path)});}
   const p=providerState();pin.hidden=state.view!=='files'||!p?.connected||!!p.share;pin.disabled=p?.busy||p?.path!==state.path;
@@ -86,6 +87,6 @@
   const groups=[['general','运行'],['appearance','外观'],['storage','传输与存储'],['feedback','声音与通知'],['convenience','便捷操作'],['about','关于与更新']],sections={};for(const [key,label]of groups){const s=document.createElement('section');s.dataset.settingsPanel=key;s.setAttribute('aria-label',label);sections[key]=s;panels.append(s);const b=document.createElement('button');b.textContent=label;b.onclick=()=>selectSettings(key);b.dataset.settingsTab=key;nav.append(b)}
   let group='general';for(const node of nodes){if(node.matches('.setting-group-title')){group=({'运行与同步':'general','外观':'appearance','传输与存储':'storage','便捷操作':'convenience','声音与通知':'feedback'})[node.textContent]||'about';continue;}if(node.querySelector('#releaseNotes,#exportDiagnostics,#updateCard')||node.id==='updateCard'||node.classList.contains('setting-about'))group='about';sections[group].append(node)}
   body.replaceChildren(nav,panels);function selectSettings(key){nav.querySelectorAll('button').forEach(b=>b.classList.toggle('active',b.dataset.settingsTab===key));Object.entries(sections).forEach(([k,s])=>s.hidden=k!==key)}selectSettings('general');
- };$('#settings').onclick=settings;$('#sheet').addEventListener('close',()=>$('#sheet').classList.remove('settings-sheet'));
+ };$('#settings').onclick=settings;$('#sheet').addEventListener('close',()=>{if(!$('#sheet').open)$('#sheet').classList.remove('settings-sheet')});
  render();refreshExtras();
 })();

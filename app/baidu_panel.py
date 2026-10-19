@@ -183,6 +183,7 @@ class BaiduPanel:
         def current():
             return (not self.closed and generation == self.generation and request_id == self.list_generation and reader is self.reader)
         self._page_has_more = False
+        self.directory_load_error = ''
         self.set_directory_busy(True)
         self.path, self.page_index = path, page_index
         self.path_text.value = path
@@ -202,6 +203,7 @@ class BaiduPanel:
         except (BaiduApiError, ValueError) as exc:
             if not current():
                 return
+            self.directory_load_error = '目录读取失败，请检查账号和网络后重新读取。'
             self.files.controls = [ft.Text(
                 getattr(self, "directory_error_hint",
                     "如果提示目录不存在，请在百度网盘中检查“我的应用数据”下是否已有对应应用目录。"
@@ -212,6 +214,7 @@ class BaiduPanel:
         except Exception:
             if not current():
                 return
+            self.directory_load_error = '目录读取失败，请稍后重新读取。'
             self.status_message("扫码授权成功，但目录响应无法处理，请稍后重试", "#B45309")
             self.next_button.disabled = True
         finally:

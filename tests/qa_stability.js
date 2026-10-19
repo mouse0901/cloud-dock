@@ -11,6 +11,7 @@
   results.sequential_switches=8;results.all_switches_still_animated=animated===8;results.theme_button_usable=!CloudDockTheme.busy;
   const savedApi=api;let resolvePreview;const calls=[];
   api=async(action,args)=>{calls.push([action,args]);if(action==='delete_preview')return await new Promise(r=>resolvePreview=r);return {};};
+  const fixture={id:'qa-image',name:'测试文件.png',path:'/工作文件/测试文件.png',type:'image',size:100};Object.assign(live.providers.baidu,{connected:true,busy:false,share:false,path:'/工作文件',page:0,files:[fixture],context:'stability'});data.baidu['/工作文件']=[fixture];
   localGo('baidu','/工作文件');state.selected=new Set(['qa-image']);syncSelection();
   $('#deleteFiles').click();results.delete_immediate_feedback=!!$('#deleteStatus')&&$('#sheet').open;
   $('#sheet').close();resolvePreview({confirmation:'qa-delete',names:['测试文件']});await delay(50);

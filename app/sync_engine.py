@@ -11,7 +11,7 @@ from app.domain import CloudFile
 class SyncEngine:
     def __init__(self,store,operations):
         self.store,self.operations=store,operations;self.closed=False;self.task=None
-        self.cache={};self.observed={};self.active={};self.locks={};self.wake=asyncio.Event();self.last_local={}
+        self.cache={};self.observed={};self.active={};self.locks={};self.wake=asyncio.Event();self.last_local={};self.restoring=set()
     def rules(self):return self.store.all('sync_rule')
     def save_rule(self,rule):self.store.put('sync_rule',rule['id'],rule)
     def entries(self,kind,rid):return [x for x in self.store.all(kind) if x.get('rule')==rid]
@@ -91,15 +91,16 @@ class SyncEngine:
         for rel in local_rows.keys()|remote_rows.keys():
             action=decide(local_rows.get(rel),remote_mark(remote_rows[rel]) if rel in remote_rows else None,None,mode)
             if action in counts:counts[action]+=1
-        rule['preview']=counts;rule['count']=len(local_rows.keys()|remote_rows.keys());return rule
+        rule['preview']=counts;rule['count']=len(local_rows.keys()|remote_rows.keys())
+        rule['excluded']=await asyncio.to_thread(excluded_preview,rule);return rule
     def check_overlap(self,rule):
         kind,remote,account,provider=rule['kind'],rule['remote_root'],rule['account'],rule['provider']
         path=Path(rule['local_root'])/rule['local_name'] if kind=='file' else Path(rule['local_root'])
-        for existing in self.rules()+self.store.all('backup'):
+        for existing in self.rules():
             existing_root=Path(existing.get('local_root',existing.get('local','')))
             existing_file=existing_root/existing.get('local_name','') if existing.get('kind')=='file' else existing_root
             overlap=path==existing_file or (kind=='folder' and path in existing_file.parents) or (existing.get('kind')!='file' and existing_file in path.parents)
-            if overlap:raise CloudOperationError('本地范围与已有同步或备份任务重叠，请先解除旧任务。')
+            if overlap:raise CloudOperationError('本地范围与已有同步任务重叠，请先解除旧任务。')
             if existing.get('account')==account and existing.get('provider')==provider:
                 other=existing.get('remote_root',existing.get('target',''))
                 here=remote.rstrip('/')+'/'+rule['remote_name'] if kind=='file' else remote
@@ -111,6 +112,7 @@ class SyncEngine:
         self.save_rule(rule);self.wake.set()
     async def toggle(self,rid,enabled):
         if type(enabled) is not bool:raise CloudOperationError('开关值无效。')
+        if enabled and rid in self.restoring:raise CloudOperationError('正在恢复历史副本，请完成后再继续同步。')
         rule=self.store.get('sync_rule',rid)
         if not rule:raise CloudOperationError('同步任务不存在。')
         rule.update(enabled=enabled,next=0,status='等待检查' if enabled else '已暂停');self.save_rule(rule);self.wake.set()

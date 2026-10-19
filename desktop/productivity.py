@@ -63,17 +63,27 @@ class Productivity:
             except OSError:pass
     def overlap(self,name,account,paths):
         f=self.bridge.features
-        for rule in f.sync.rules()+f.store.all('backup'):
+        for rule in f.sync.rules():
             if rule.get('provider')!=name or rule.get('account')!=account:continue
             root=rule.get('remote_root',rule.get('target',''))
             if rule.get('kind')=='file':root=root.rstrip('/')+'/'+rule['remote_name']
             if root and any(p==root or p.startswith(root.rstrip('/')+'/') or root.startswith(p.rstrip('/')+'/') for p in paths):
-                if rule.get('enabled') or f.sync.entries('sync_pending',rule['id']):raise CloudOperationError('这个位置关联同步或备份，请先暂停任务并处理未完成更新。')
+                if rule.get('enabled') or f.sync.entries('sync_pending',rule['id']):raise CloudOperationError('这个位置关联同步，请先暂停任务并处理未完成更新。')
     async def action(self,d):
         action=d['action']
-        if action in ('tools_status','tools_cancel'):
+        if action in ('tools_status','tools_cancel','tools_stop'):
             row=self.jobs.get(d.get('token'))
             if not row:raise CloudOperationError('操作记录已过期。')
+            if action=='tools_stop':
+                if row['kind']!='search':raise CloudOperationError('只能停止搜索。')
+                self.public(row)
+                task=self.tasks.pop(row['token'],None)
+                if task and not task.done():
+                    task.cancel()
+                    try:await task
+                    except asyncio.CancelledError:pass
+                row.update(status='stopped',message='搜索已停止，保留已找到的结果。')
+                return self.public(row)
             if action=='tools_cancel':
                 if row['kind']=='operation':raise CloudOperationError('已提交的文件操作不能中途取消，请等待结果。')
                 self.discard(row['token']);return {}

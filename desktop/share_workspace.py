@@ -51,7 +51,10 @@ class ShareWorkspace:
                 ops.guard(stamp)
                 token=secrets.token_hex(24)
                 self.sessions[token]={'provider':link['provider'],'ops':ops,'stamp':stamp,'panel':p,'share':share,
-                    'list':listing,'source':resolver,'client':owned,'at':time.monotonic(),'used':False,'path':'/','page':0,'rows':rows,'revision':0}
+                    'list':listing,'source':resolver,'client':owned,'at':time.monotonic(),'used':False,'path':'/','page':0,'rows':rows,'revision':0,'link':link,'inbox_id':d.get('inbox_id')}
+                if d.get('inbox_id'):
+                    saved=next((x for x in self.bridge.inbox.rows() if x['id']==d['inbox_id'] and x.get('url')==link['url'].split('?')[0]),None)
+                    if not saved:self.sessions[token]['inbox_id']=None
                 return self.snapshot(token)
             except BaseException:
                 if owned:await owned.aclose()
@@ -64,6 +67,8 @@ class ShareWorkspace:
         rows=await row['list'](path,page);row['ops'].guard(row['stamp'])
         if row['revision']!=revision:raise CloudOperationError('已切换到另一个分享目录。')
         row.update(path=path,page=page,rows=rows)
+        if row.get('inbox_id') and self.bridge.inbox.store.get('link_inbox',row['inbox_id']):
+            self.bridge.inbox.save(row['link'],path=path,page=page)
         return self.snapshot(d['session'])
     def snapshot(self,token):
         row=self.session(token)

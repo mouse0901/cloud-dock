@@ -3,6 +3,8 @@
 /downloads/
 /installed-data.txt
 /import-pending
+docs/LOCAL-*.md
+docs/LOCAL-VALIDATION.json
 *.sqlite3
 *.sqlite3-wal
 *.sqlite3-shm

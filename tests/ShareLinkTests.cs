@@ -20,6 +20,7 @@ class ShareLinkTests {
   Check(many.Count==2&&many[0].url=="https://pan.baidu.com/s/1abcdef?pwd=Ab12"&&many[1].password=="Cd34","two providers and legacy link");
   Check(ShareLink.ParseAll("https://pan.quark.cn/s/abcdef12 https://pan.quark.cn/s/abcdef12").Count==1,"same clipboard duplicate");
   var history=new ShareLinkHistory();Check(history.Accept(quark),"first offer");Check(!history.Accept(ShareLink.Parse(quark.url+"#folder")),"repeat not offered");Check(!history.Accept(null),"ordinary clipboard not retained");Check(history.Accept(ShareLink.Parse("https://pan.quark.cn/s/11bbafa97c9b?pwd=Ab12")),"changed code accepted");
+  DateTime now=DateTime.UtcNow;var timed=new ShareLinkHistory(()=>now);Check(timed.Accept(quark),"fresh link");now=now.AddMinutes(9);Check(!timed.Accept(quark),"dedup during cooldown");now=now.AddMinutes(2);Check(timed.Accept(quark),"can offer new copy after cooldown");
   Console.WriteLine("PASS "+count+" share recognition checks");
  }
 }

@@ -328,7 +328,7 @@ class UpdateService:
         self.cancel = threading.Event()
         self.closed = False
         self.state = {"status": "disabled" if not self.client.config.get("enabled") else "idle", "current": VERSION,
-                      "channel": workspace.settings.get("update_channel", "beta"), "progress": 0, "downloaded": 0,
+                      "channel": workspace.settings.get("update_channel", "stable"), "progress": 0, "downloaded": 0,
                       "total": 0, "error": "", "available": "", "notes": "", "install_when_idle": False}
         self.manifest = None
         self._restore()
@@ -341,7 +341,7 @@ class UpdateService:
             signature = manifest["_signature"].encode("ascii")
             verify_rs256(payload, signature, self.client.config["public_key"])
             verified = json.loads(payload.decode("utf-8"), object_pairs_hook=_unique_object)
-            channel = self.workspace.settings.get("update_channel", "beta")
+            channel = self.workspace.settings.get("update_channel", "stable")
             UpdateClient.validate(verified, channel, self.client.config.get("repository", ""))
             verified["_signed_payload"] = manifest["_signed_payload"]
             verified["_signature"] = manifest["_signature"]
@@ -412,7 +412,7 @@ class UpdateService:
 
     async def _check(self, manual):
         try:
-            channel = self.workspace.settings.get("update_channel", "beta")
+            channel = self.workspace.settings.get("update_channel", "stable")
             manifest = await asyncio.to_thread(self.client.check, channel)
             now = int(time.time()); self.workspace.settings["update_last_checked"] = now
             await self.workspace.save()

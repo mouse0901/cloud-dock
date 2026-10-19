@@ -36,6 +36,11 @@ class StartupTests(unittest.IsolatedAsyncioTestCase):
   with self.assertRaises(UiError):await self.bridge.action({'action':'desktop_preferences','close_to_tray':False,'clipboard_links':'true'})
   self.assertTrue(self.bridge.workspace.settings['close_to_tray'])
   self.assertFalse(self.bridge.workspace.settings['clipboard_links'])
+ async def test_clipboard_wake_defaults_on_and_is_independent(self):
+  self.assertTrue((await self.bridge.snapshot())['clipboard_wake'])
+  await self.bridge.action({'action':'desktop_preferences','clipboard_wake':False})
+  restored=Workspace(self.path/'data');self.assertFalse(restored.settings['clipboard_wake']);self.assertTrue(restored.settings['clipboard_links'])
+  with self.assertRaises(UiError):await self.bridge.action({'action':'desktop_preferences','clipboard_wake':'false'})
  async def test_slow_controller_import_does_not_block_snapshot(self):
   started=threading.Event();release=threading.Event()
   def slow():started.set();release.wait(3);return {}

@@ -68,6 +68,22 @@ def local_snapshot(rule,cache=None,metadata_only=False):
     return result
 def remote_mark(item):
     return {'dir':item.is_dir,'id':item.id,'revision':item.revision,'size':item.size}
+
+def excluded_preview(rule):
+    """Count pruned entries, not unseen descendants; keep previews bounded."""
+    result={'count':0,'rows':[]}
+    if rule['kind']=='file':return result
+    base=Path(rule['local_root']);visited=0
+    for parent,dirs,files in os.walk(base,followlinks=False):
+        for name in [*dirs,*files]:
+            rel=(Path(parent)/name).relative_to(base).as_posix();visited+=1
+            if ignored(rel,rule['exclude']):
+                result['count']+=1
+                if len(result['rows'])<50:result['rows'].append(rel)
+                if name in dirs:dirs.remove(name)
+            elif not ordinary(Path(parent)/name) and name in dirs:dirs.remove(name)
+        if visited>LIMIT:break
+    return result
 def local_equal(a,b):
     if a is None or b is None:return a is b
     return a['dir']==b['dir'] and (a['dir'] or a.get('hash')==b.get('hash'))

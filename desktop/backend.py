@@ -10,6 +10,7 @@ from app.runtime_paths import data_dir,work_dir
 os.environ['TEMP']=os.environ['TMP']=str(work_dir())
 work_dir().mkdir(parents=True,exist_ok=True)
 from app.workspace import Workspace
+from app.layout_preferences import DEFAULTS as LAYOUT_DEFAULTS
 from app.local_files import prepare_download_root
 from app.domain import CloudFile
 
@@ -23,6 +24,11 @@ class Page:
 class Bridge:
     def __init__(self,panels=None,workspace=None,*,defer=False):
         self.page=Page();self.workspace=workspace or Workspace(data_dir())
+        from app.health import Health
+        from app.account_profiles import AccountProfiles
+        from desktop.accounts import Accounts
+        from desktop.settings_portability import SettingsPortability
+        self.health=Health();self.profiles=AccountProfiles(self.workspace.data_dir/'sessions');self.accounts_manager=Accounts(self);self.settings_portability=SettingsPortability(self)
         self.panels=panels if panels is not None else ({} if defer else self.create_panels())
         self.deferred=defer;self.features=None;self.updates=None;self.update_start=None;self.initializing=None;self.initialization_error='';self.closing=False
         self.stop=asyncio.Event();self.selections={};self.startups=[]
@@ -33,15 +39,26 @@ class Bridge:
         from desktop.share_workspace import ShareWorkspace
         from desktop.download_dialog import DownloadDialog
         self.shares=ShareWorkspace(self);self.download_dialog=DownloadDialog(self)
+        from desktop.batch_operations import BatchOperations
+        self.batches=BatchOperations(self)
+        from desktop.navigation import BrowserNavigation
+        from desktop.transfer_management import TransferManagement
+        self.navigation=BrowserNavigation(self);self.transfers=TransferManagement(self)
+        from desktop.cross_copy import CrossCopy
+        from desktop.link_inbox import LinkInbox
+        from desktop.share_actions import ShareActions
+        self.cross=CrossCopy(self);self.inbox=LinkInbox(self);self.sharing=ShareActions(self)
         for p in self.panels.values():p.set_download_root(self.workspace.settings['download_dir'])
     def create_panels(self):
         # Import the former Flet controllers off the first-response path.
         from app.baidu_web_panel import BaiduWebPanel
         from app.quark_panel import QuarkPanel
-        return {'baidu':BaiduWebPanel(self.page),'quark':QuarkPanel(self.page)}
+        from app.account_profiles import ProfileVault
+        return {'baidu':BaiduWebPanel(self.page,session_store=ProfileVault(self.profiles,'baidu')),'quark':QuarkPanel(self.page,session_store=ProfileVault(self.profiles,'quark'))}
     async def initialize(self):
         try:
             self.panels=await asyncio.to_thread(self.create_panels)
+            self.health.mark('controllers_ready')
             for p in self.panels.values():p.set_download_root(self.workspace.settings['download_dir'])
             if not self.closing:await self.start_features()
         except Exception:
@@ -50,15 +67,22 @@ class Bridge:
     async def start_features(self):
         from desktop.features import Features
         self.features=Features(self);await self.features.start()
-        from app.updater import UpdateService
-        self.updates=UpdateService(self.workspace,self.update_busy)
-        self.update_start=asyncio.create_task(self.updates.start())
         self.startups=[asyncio.create_task(p.startup(saved_only=True)) for p in self.panels.values()]
+        self.health.mark('workspace_ready')
+        if self.deferred:self.update_start=asyncio.create_task(self.start_updates())
+        else:await self.start_updates(background=True)
+    async def start_updates(self,background=False):
+        from app.updater import UpdateService
+        self.updates=await asyncio.to_thread(UpdateService,self.workspace,self.update_busy)
+        if background:self.update_start=asyncio.create_task(self.updates.start())
+        else:await self.updates.start()
     def update_busy(self):
+        if self.features and any(ops.lock.locked() for ops in self.features.ops.values()):return True
+        if self.batches.active or self.sharing.active or any(not t.done() for t in self.cross.tasks.values()):return True
         if any(row['kind']=='operation' and row['status']=='running' for row in self.productivity.jobs.values()):return True
         active={'retrying','queued','resolving','preparing','uploading','downloading','committing','verifying'}
         if any(j.state in active for p in self.panels.values() for j in [*p.jobs,*p.upload_jobs]):return True
-        return bool(self.features and (self.features.sync.active or self.features.backup.running))
+        return bool(self.features and (self.features.sync.active or self.features.sync.restoring))
     async def start(self):
         if self.deferred:
             self.initializing=asyncio.create_task(self.initialize());return
@@ -68,6 +92,8 @@ class Bridge:
         if self.initializing:await asyncio.gather(self.initializing,return_exceptions=True)
         if self.update_start:self.update_start.cancel();await asyncio.gather(self.update_start,return_exceptions=True)
         if self.updates:await self.updates.close()
+        await self.cross.close()
+        await self.batches.close()
         await self.productivity.close()
         await self.experience.close()
         await self.download_dialog.close()
@@ -88,13 +114,16 @@ class Bridge:
             for j in [*p.jobs,*p.upload_jobs]:
                 if not hasattr(j,'_desktop_id'):j._desktop_id=secrets.token_hex(12)
                 rows.append({'id':j._desktop_id,'provider':provider,'name':j.item.name,'path':j.item.path,
+                    'account_name':self.profiles.label(provider,self.features.accounts.get(provider,'')) if self.features else '', 'account_current':True,
                     'direction':getattr(j,'direction','download'),'status':j.state,'done':j.done,'total':j.total,
                     'speed':j.speed,'error':j.error,'warning':getattr(j,'warning',''),
                     'restart':j.requires_restart,'committed':getattr(j,'commit_started',False),
                     'target':str(getattr(j,'target','') or ''),'connections':getattr(j,'active_connections',0),
-                    'group':getattr(j,'_download_group','')})
+                    'group':getattr(j,'_download_group',''),'group_id':getattr(j,'_group_id',''),'priority':getattr(j,'_priority',1),
+                    'error_code':getattr(j,'error_code','') or next((code for entry,code in getattr(p,'_live_errors',{}).items() if entry is j),'')})
         return rows+(self.features.archived() if self.features else [])
     async def snapshot(self):
+        snapshot_started=time.monotonic();self.health.snapshots+=1
         providers={}
         for name,p in self.panels.items():
             qr=''
@@ -104,40 +133,68 @@ class Bridge:
             color=str(p.status.color).upper()
             providers[name]={'connected':p.reader is not None and p.api.authenticated,'busy':p.browser_busy,'path':p.path or '/',
                 'page':p.page_index,'previous':not p.prev_button.disabled,'next':not p.next_button.disabled,
-                'files':self.files(p),'context':self.context(p),'message':p.status.value,'qr':qr,
+                'files':self.files(p),'session':str(p.generation),'context':self.context(p),'message':p.status.value,'qr':qr,
                 'error':p.status.value if color in ('#C05020','#B91C1C') else '',
                 'retry':p.retry_button.visible,'share':bool(getattr(p,'share',None)),
-                'root':p.reader.root if p.reader else '/', 'remember':bool(p.remember_login.value)}
+                'root':p.reader.root if p.reader else '/', 'remember':bool(p.remember_login.value),
+                'account_name':self.profiles.label(name,self.features.accounts.get(name,'')) if self.features else ''}
         for name in ('baidu','quark'):
             if name not in providers:providers[name]={'connected':False,'busy':True,'path':'/','page':0,'previous':False,'next':False,'files':[],'context':'initializing','message':'正在恢复工作空间…','qr':'','error':'','retry':False,'share':False,'root':'/','remember':True}
-        return {**(self.features.snapshot() if self.features else {'backups':[],'sound_sequence':0,'sound':True}),
+        result={**(self.features.snapshot() if self.features else {'backups':[],'sound_sequence':0,'sound':True}),
                 'initializing':self.deferred,'initialization_error':self.initialization_error,
                 'accounts_settled':not self.deferred and not self.initialization_error and all(t.done() for t in self.startups),
                 'close_to_tray':self.workspace.settings.get('close_to_tray',True),
                 'clipboard_links':self.workspace.settings.get('clipboard_links',True),
+                'clipboard_wake':self.workspace.settings.get('clipboard_wake',True),
+                'batches':self.batches.summaries(),'cross_copies':self.cross.summaries(),
                 'providers':providers,'tasks':self.tasks(),'download_dir':self.workspace.settings['download_dir'],
+                'quick_download':self.workspace.settings.get('quick_download',False),
+                'download_directory_confirmed':self.workspace.settings.get('download_directory_confirmed',False),
                 'favorites':self.experience.favorites() if self.features else [],
-                'file_view':{k:self.workspace.settings.get(k,v) for k,v in {'view':'list','sort_field':'name','sort_desc':False}.items()},
-                'update':self.updates.snapshot() if self.updates else {'status':'initializing','current':'0.6.8','enabled':False},
-                'version':'0.6.8','migration_notice':(self.workspace.data_dir/'migration.json').exists(),'theme':self.workspace.settings.get('theme','light'),'reduced':self.workspace.settings.get('reduce_motion',False)}
+                'file_view':{k:self.workspace.settings.get(k,v) for k,v in {'view':'list','sort_field':'name','sort_desc':False,'density':'comfortable','grid_size':'medium','full_names':False,**LAYOUT_DEFAULTS}.items()},
+                'update':self.updates.snapshot() if self.updates else {'status':'initializing','current':'1.0.0','enabled':False},
+                'version':'1.0.0','migration_notice':(self.workspace.data_dir/'migration.json').exists(),'theme':self.workspace.settings.get('theme','light'),'reduced':self.workspace.settings.get('reduce_motion',False)}
+        self.health.last_snapshot_ms=round((time.monotonic()-snapshot_started)*1000,2)
+        return result
     def selected_paths(self,key,kind):
         value=self.selections.pop(key,None)
         if not value or time.monotonic()-value['at']>300 or value['kind']!=kind:raise UiError('文件选择已过期，请重新选择。')
         return value['paths']
     async def selection(self,d):
         paths=d.get('paths');kind=d.get('kind')
-        if kind not in ('files','directory') or not isinstance(paths,list) or not 1<=len(paths)<=500 or any(not isinstance(p,str) or len(p)>32768 for p in paths):raise UiError('文件选择无效。')
+        if kind not in ('files','directory','upload') or not isinstance(paths,list) or not 1<=len(paths)<=500 or any(not isinstance(p,str) or len(p)>32768 for p in paths):raise UiError('文件选择无效。')
         self.selections={k:v for k,v in self.selections.items() if time.monotonic()-v['at']<300}
         key=secrets.token_hex(24);self.selections[key]={'kind':kind,'paths':paths,'at':time.monotonic()};return {'selection':key,'count':len(paths)}
     async def action(self,d):
-        try:return await self._action(d)
+        try:
+            result=await self._action(d);self.health.action(True);return result
         except Exception as error:
+            self.health.action(False)
             from app.operation_diagnostics import public_error
             if isinstance(error,UiError):raise
             raise UiError(public_error(d.get('action'),error)) from None
 
     async def _action(self,d):
         action=d.get('action')
+        if self.accounts_manager.switching and action not in ('profiles_list','diagnostics'):raise UiError('正在切换账号，请稍候。')
+        if isinstance(action,str) and action.startswith(('profiles_','settings_')):
+            from app.session_vault import SessionStoreError
+            if not self.features:raise UiError('工作空间正在准备。')
+            try:return await (self.accounts_manager if action.startswith('profiles_') else self.settings_portability).action(d)
+            except SessionStoreError as e:raise UiError(str(e)) from None
+        if isinstance(action,str) and action.startswith(('cross_','inbox_','sharing_')):
+            from app.cloud_operations import CloudOperationError
+            if not self.features:raise UiError('工作空间正在准备。')
+            service=self.cross if action.startswith('cross_') else self.inbox if action.startswith('inbox_') else self.sharing
+            try:return await service.action(d)
+            except CloudOperationError as e:raise UiError(str(e)) from None
+        if action=='changelog':return json.loads((ROOT/'desktop/web/changelog.json').read_text(encoding='utf-8'))
+        if action in ('browse_view','browse_locate') or isinstance(action,str) and action.startswith('transfers_'):
+            from app.cloud_operations import CloudOperationError
+            try:return await (self.navigation if action.startswith('browse_') else self.transfers).action(d)
+            except CloudOperationError as e:raise UiError(str(e)) from None
+        if isinstance(action,str) and action.startswith('batch_'):
+            return await self.batches.action(d)
         if isinstance(action,str) and action.startswith('feedback_'):
             if not self.features:return {'events':[],'preferences':{},'quiet':True}
             feedback=self.features.feedback
@@ -157,6 +214,11 @@ class Bridge:
             try:return await self.productivity.action(d)
             except CloudOperationError as error:raise UiError(str(error)) from None
         if action=='file_view':
+            from app.layout_preferences import clean
+            self.workspace.settings.update(clean(d))
+            if d.get('density') in ('comfortable','compact'):self.workspace.settings['density']=d['density']
+            if d.get('grid_size') in ('small','medium','large'):self.workspace.settings['grid_size']=d['grid_size']
+            if type(d.get('full_names')) is bool:self.workspace.settings['full_names']=d['full_names']
             if d.get('view') in ('list','grid'):self.workspace.settings['view']=d['view']
             if d.get('sort_field') in ('name','size','date'):self.workspace.settings['sort_field']=d['sort_field']
             if type(d.get('sort_desc')) is bool:self.workspace.settings['sort_desc']=d['sort_desc']
@@ -170,6 +232,12 @@ class Bridge:
         if action=='diagnostics':
             from app.diagnostics import report
             return {'report':report(self)}
+        if action=='recovery_prepare':
+            if self.update_busy() or self.updates and self.updates.task and not self.updates.task.done():raise UiError('请暂停传输、同步和更新操作，再恢复程序。')
+            return {'ready':True}
+        if action=='health_check':
+            from app.diagnostics import check
+            return await check(self)
         if action=='shutdown':self.stop.set();return {}
         if isinstance(action,str) and action.startswith('update_'):
             from app.updater import UpdateError
@@ -185,7 +253,7 @@ class Bridge:
             except UpdateError as e:raise UiError(str(e)) from None
             raise UiError('未识别的更新操作。')
         if action=='desktop_preferences':
-            fields=[key for key in ('close_to_tray','clipboard_links') if key in d]
+            fields=[key for key in ('close_to_tray','clipboard_links','clipboard_wake') if key in d]
             if not fields or any(type(d[key]) is not bool for key in fields):raise UiError('设置值无效。')
             for key in fields:self.workspace.settings[key]=d[key]
             await self.workspace.save();return {}
@@ -200,10 +268,10 @@ class Bridge:
             await self.workspace.save();return {}
         if action=='download_directory':
             folder=self.selected_paths(d.get('selection'),'directory')[0]
-            path=prepare_download_root(folder);self.workspace.settings['download_dir']=str(path);await self.workspace.save()
+            path=prepare_download_root(folder);self.workspace.settings['download_dir']=str(path);self.workspace.settings['download_directory_confirmed']=True;await self.workspace.save()
             for p in self.panels.values():p.set_download_root(path)
             return {}
-        if self.features and (isinstance(action,str) and action.startswith('sync_') or action in ('sound','clear_thumbnails','backup_toggle','backup_remove','backup_preview','backup_confirm','delete_preview','delete_confirm','trash_list','trash_restore')):
+        if self.features and (isinstance(action,str) and action.startswith('sync_') or action in ('sound','clear_thumbnails','delete_preview','delete_confirm','trash_list','trash_restore')):
             from app.cloud_operations import CloudOperationError
             try:return await self.features.action(d)
             except CloudOperationError as e:raise UiError(str(e)) from None
@@ -315,7 +383,8 @@ class Handler(BaseHTTPRequestHandler):
         if path=='health':return self.respond(200,{'ok':True})
         if path=='cloud-dock.ico':return self.respond(200,(ROOT/'assets/branding/cloud-dock.ico').read_bytes(),'image/x-icon')
         allowed={'':'index.html','index.html':'index.html','app.js':'app.js','prototype.css':'prototype.css','desktop.css':'desktop.css','theme-reveal.js':'theme-reveal.js','theme-reveal.css':'theme-reveal.css','cloud-dock.png':'cloud-dock.png','features.js':'features.js','features.css':'features.css','lifecycle.js':'lifecycle.js','clipboard.js':'clipboard.js','sync.js':'sync.js','sync.css':'sync.css','startup.js':'startup.js','update.js':'update.js','update.css':'update.css','experience.js':'experience.js','experience.css':'experience.css','productivity.js':'productivity.js','productivity.css':'productivity.css'}
-        allowed.update({'feedback.js':'feedback.js','feedback.css':'feedback.css','share-workspace.js':'share-workspace.js','share-workspace.css':'share-workspace.css'})
+        allowed.update({'feedback.js':'feedback.js','feedback.css':'feedback.css','share-workspace.js':'share-workspace.js','share-workspace.css':'share-workspace.css','batch.js':'batch.js','batch.css':'batch.css'})
+        allowed.update({x:x for x in ('workspace.css','browser-workspace.js','transfer-workspace.js','organize.js','organize.css','sync-review.js','aggregate.js','longevity.js','longevity.css','usability.js','usability.css','product-polish.js','product-polish.css')})
         if path not in allowed:return self.respond(404,{'error':'Not found'})
         file=ROOT/'desktop/web'/allowed[path]
         qa=os.environ.get('CLOUD_DOCK_QA_TIMINGS')

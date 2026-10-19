@@ -8,6 +8,7 @@
  function preferences(){
   const value={type:'desktopPreferences',close_to_tray:live?.close_to_tray!==false,
    clipboard_links:live?.clipboard_links!==false,
+   clipboard_wake:live?.clipboard_wake!==false,
    dark:document.body.classList.contains('dark'),reduced:document.body.classList.contains('reduced')};
   const key=JSON.stringify(value);if(key!==lastPreferences){lastPreferences=key;send(value);}
  }
@@ -53,7 +54,7 @@
     try{
      await api('desktop_preferences',{close_to_tray:live?.close_to_tray!==false});result.action=true;
      const stateResponse=await fetch(apiUrl('api/state'));const snapshot=await stateResponse.json();
-     result.state=stateResponse.ok&&snapshot.version==='0.6.8'&&!snapshot.initializing;
+     result.state=stateResponse.ok&&snapshot.version==='1.0.0'&&!snapshot.initializing;
      const forbidden=await fetch(apiUrl('api/selection'));result.pickerBlocked=!forbidden.ok;
     }catch{}finally{send(result);}
    })();
@@ -65,7 +66,7 @@
  settings=function(){
   previousSettings();
   const row=document.createElement('div');row.className='setting-line';
-  row.innerHTML='<span>关闭窗口后继续在后台运行<small>保留在系统托盘，传输、同步与备份继续运行</small></span><button id="traySwitch" class="switch" role="switch" aria-label="关闭窗口后继续在后台运行"></button>';
+  row.innerHTML='<span>关闭窗口后继续在后台运行<small>保留在系统托盘，传输、同步继续运行</small></span><button id="traySwitch" class="switch" role="switch" aria-label="关闭窗口后继续在后台运行"></button>';
   $('#sheetBody').prepend(row);
   const button=$('#traySwitch');let enabled=live?.close_to_tray!==false;
   function update(){button.classList.toggle('on',enabled);button.setAttribute('aria-checked',String(enabled));}
@@ -75,7 +76,7 @@
    catch(error){report(error);}finally{button.disabled=false;}
   };
   const clipboardRow=document.createElement('div');clipboardRow.className='setting-line';
-  clipboardRow.innerHTML='<span>自动识别剪贴板分享链接<small>回到云屿时提示百度或夸克链接；点击后才打开</small></span><button id="clipboardSwitch" class="switch" role="switch" aria-label="自动识别剪贴板分享链接"></button>';
+  clipboardRow.innerHTML='<span>自动识别剪贴板分享链接<small>识别新复制的百度或夸克链接，自动提取访问码</small></span><button id="clipboardSwitch" class="switch" role="switch" aria-label="自动识别剪贴板分享链接"></button>';
   row.after(clipboardRow);const clipboardButton=$('#clipboardSwitch');let clipboardEnabled=live?.clipboard_links!==false;
   function updateClipboard(){clipboardButton.classList.toggle('on',clipboardEnabled);clipboardButton.setAttribute('aria-checked',String(clipboardEnabled));}
   updateClipboard();clipboardButton.onclick=async()=>{
@@ -84,6 +85,10 @@
    catch(error){report(error);}finally{clipboardButton.disabled=false;}
   };
   const exit=document.createElement('button');exit.className='quiet';exit.textContent='退出云屿';
+  const wakeRow=document.createElement('div');wakeRow.className='setting-line';wakeRow.innerHTML='<span>识别链接后唤起云屿<small>从最小化或托盘恢复窗口；同一链接不重复打扰</small></span><button id="clipboardWakeSwitch" class="switch" role="switch" aria-label="识别链接后唤起云屿"></button>';clipboardRow.after(wakeRow);
+  const wake=$('#clipboardWakeSwitch');let wakeEnabled=live?.clipboard_wake!==false;
+  const drawWake=()=>{wake.classList.toggle('on',wakeEnabled);wake.setAttribute('aria-checked',String(wakeEnabled));};drawWake();
+  wake.onclick=async()=>{wake.disabled=true;try{await api('desktop_preferences',{clipboard_wake:!wakeEnabled});wakeEnabled=!wakeEnabled;if(live)live.clipboard_wake=wakeEnabled;drawWake();preferences();}catch(e){report(e);}finally{wake.disabled=false;}};
   exit.disabled=!native;exit.onclick=()=>send({type:'exitApplication'});$('#sheetBody').append(exit);
  };$('#settings').onclick=settings;
  // Handlers and feature scripts are attached before this marker. Do not wait for a cloud request.

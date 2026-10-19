@@ -73,7 +73,7 @@ class LiveDownloadMixin:
             callback()
 
     def _ensure_live_worker(self):
-        if self.closed or self._downloads_stopping:
+        if self.closed or self._downloads_stopping or getattr(self,'_queue_hold',False):
             return
         if self._live_worker is None or self._live_worker.done():
             self._live_worker = asyncio.create_task(self._drive_download_queue())
@@ -154,8 +154,8 @@ class LiveDownloadMixin:
 
     async def _drive_download_queue(self):
         try:
-            while not self.closed and not self._downloads_stopping:
-                job = next((entry for entry in self.jobs if entry.state == 'queued'), None)
+            while not self.closed and not self._downloads_stopping and not getattr(self,'_queue_hold',False):
+                job = next(iter(sorted((entry for entry in self.jobs if entry.state == 'queued'), key=lambda j:-getattr(j,'_priority',1))), None)
                 if job is None:
                     return
                 task = asyncio.create_task(self._run_queued(job))

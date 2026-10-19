@@ -16,6 +16,12 @@ class DownloadDialog:
         self.guard(row);return row
     async def action(self,d):
         action=d['action']
+        if action=='download_preferences':
+            if type(d.get('quick')) is not bool:raise CloudOperationError('下载设置无效。')
+            if d['quick'] and not self.bridge.workspace.settings.get('download_directory_confirmed'):
+                raise CloudOperationError('请先在下载确认中选择默认保存位置。')
+            self.bridge.workspace.settings['quick_download']=d['quick'];await self.bridge.workspace.save()
+            return {'quick':d['quick']}
         if action=='download_prepare':
             if not self.bridge.features:raise CloudOperationError('工作空间正在准备。')
             share=self.bridge.shares.session(d.get('session')) if d.get('session') else None
@@ -59,6 +65,19 @@ class DownloadDialog:
             self.tasks[token]=asyncio.create_task(self.bridge.experience.scan(ScanOps(),row,selected,parent))
             return {'token':token,**self.snapshot(row)}
         row=self.get(d.get('token'))
+        if action=='download_quick':
+            settings=self.bridge.workspace.settings
+            from app.direct_download import _safe_name
+            eligible=(row['state']=='ready' and settings.get('quick_download') is True
+                      and settings.get('download_directory_confirmed') is True
+                      and not row['share_key'] and not row['folders'] and row['count']==1
+                      and row['destination']==settings['download_dir'])
+            if eligible:
+                item,parent=row['items'][0]
+                # Explicit confirmation remains necessary for any occupied name.
+                eligible=not (Path(parent)/_safe_name(item.name)).exists()
+            if not eligible:return {'confirmation_required':True,**self.snapshot(row)}
+            action='download_commit'
         if action=='download_status':return self.snapshot(row)
         if action=='download_cancel':
             if row['state'] not in ('submitted','submitting'):
@@ -77,14 +96,18 @@ class DownloadDialog:
             root=Path(row['destination']);Experience.check_disk(root,row['bytes']);Experience.safe_directory(root,root)
             for directory in row['directories']:Experience.safe_directory(Path(directory),root)
             if d.get('remember') is True:
-                self.bridge.workspace.settings['download_dir']=str(root);await self.bridge.workspace.save()
+                self.bridge.workspace.settings['download_dir']=str(root)
+                self.bridge.workspace.settings['download_directory_confirmed']=True
+                if type(d.get('quick')) is bool:self.bridge.workspace.settings['quick_download']=d['quick']
+                await self.bridge.workspace.save()
                 for p in self.bridge.panels.values():p.set_download_root(root)
             count=0
             for item,parent in row['items']:
                 self.guard(row)
                 job=await row['panel'].start_download(item,destination=parent,group=row['group'],notify=False,
                     resolver_override=row['resolver'],share_key=row['share_key'])
-                if job is not None:count+=1
+                if job is not None:
+                    job._group_id=d['token'];count+=1
             if row['share_key']:self.bridge.shares.session(row['share_key'])['used']=True
             row['panel']._downloads_changed();row['panel']._ensure_live_worker()
             self.bridge.features.capture(row['provider'],force=True);row['state']='submitted'

@@ -84,6 +84,7 @@ class Experience:
                 for item,destination in plan['items']:
                     ops.guard(plan['stamp'])
                     job=await p.start_download(item,destination=destination,group=plan['group'],notify=False)
+                    if job is not None:job._group_id=d['token']
                     if job is not None:count+=1
                 p._downloads_changed();p._ensure_live_worker()
                 plan['state']='submitted'

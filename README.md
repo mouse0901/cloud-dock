@@ -1,33 +1,39 @@
+当前正式版本：1.0.0
+
 # 云屿 Cloud Dock
 
-云屿是面向 Windows 的百度网盘与夸克网盘桌面客户端。每个用户登录自己的账号；百度功能使用百度授权与网盘能力，夸克功能通过独立适配层实现。登录会话仅加密保存在当前 Windows 用户的数据目录中。
+云屿是面向 Windows 的个人网盘桌面工作台，把百度网盘与夸克网盘的浏览、上传下载、同步、分享链接和传输管理放在同一个清晰的工作区。每位用户使用自己的网盘账号，登录会话只保存在当前 Windows 用户的数据目录中。
 
-当前测试版提供文件浏览、上传与下载、分享链接识别、缩略图、回收站、文件夹与单文件同步、版本备份、托盘运行、开机启动，以及经过签名验证的软件更新。
+[下载 Windows 安装包与便携版](https://github.com/mouse0901/cloud-dock-releases/releases/latest) · [安装与升级](docs/INSTALL.md) · [使用指南](docs/USAGE.md) · [隐私与数据说明](docs/PRIVACY.md) · [开发与构建](docs/DEVELOPMENT.md) · [更新记录](CHANGELOG.md)
+
+## v1.0.0 正式版
+
+- 文件工作区：列表或网格、缩略图、搜索、多标签、右键菜单、移动、重命名、删除与回收站。
+- 传输中心：文件和文件夹上传下载、分组、优先级、暂停续传、失败重试、预计时间、声音与通知。
+- 同步：文件夹或单文件的双向、仅上传、仅下载、排除规则、变化清单、冲突、历史版本与恢复副本。
+- 链接和账号：剪贴板分享链接识别与托盘唤起、链接收件箱、多账号切换、跨网盘搜索与确认式复制。
+- 长期运行：托盘、开机启动、个人偏好导入导出、脱敏诊断、更新恢复和签名更新。
+
+实际下载速度、会员权益和平台能力取决于网盘账号、平台调度、文件和网络环境。云屿不会绕过平台限制。
 
 ## 目录
 
-- `app/`：网盘适配、传输、同步、备份、更新与本地数据逻辑。
-- `desktop/`：Windows 原生宿主、WebView 界面和本地回环桥接。
-- `installer/`：Inno Setup 安装器。
-- `tests/`：离线回归和安全边界测试。
-- `tools/`：构建、验收、更新清单签名和 GitHub Release 工具。
+- app：网盘适配、传输、同步、历史恢复、更新与本地数据逻辑。
+- desktop：Windows 原生宿主、WebView 界面和本地回环桥接。
+- installer：Inno Setup 安装器。
+- tests：离线回归和安全边界测试。
+- tools：构建、验收、更新清单签名和 GitHub Release 工具。
 
-`data/`、运行时、构建输出、登录会话和更新私钥均被排除在仓库之外。不要提交个人网盘内容、Cookie、数据库、诊断日志或下载文件。
+个人数据、运行时、构建输出、登录会话和更新私钥均被排除在仓库之外。不要提交个人网盘内容、Cookie、数据库、诊断日志或下载文件。
 
-## 本地验证
-
-```powershell
-H:\CodexOutputs\projects\cloud-dock-0.6.2-dev\runtime\python\python.exe -B -m unittest discover -s H:\CodexOutputs\projects\cloud-dock-0.6.2-dev\tests -v
-```
-
-生成 Windows 安装包：
-
-```powershell
-& H:\CodexOutputs\projects\cloud-dock-0.6.2-dev\tools\build_installer.ps1
-```
-
-发行文件输出到 `H:\CodexOutputs\packages\cloud-dock\<版本>`。发布方法见 `docs/RELEASE.md`。
+开发环境、测试和 Windows 发行构建见 [开发与构建](docs/DEVELOPMENT.md)。发行流程和更新签名边界见 [发布流程](docs/RELEASE.md)。
 
 ## 项目状态
 
-这是测试阶段软件。夸克上传、长期同步、大目录和多设备同时修改仍需更多真实账号验收。安装包目前没有 Windows Authenticode 代码签名，Windows 可能显示未知发布者提示。
+这是正式发布的软件，但仍有平台边界：夸克上传、双向同步、跨盘复制、创建分享与转存需要按账号和平台能力验证；长时间断网、大目录和多设备同时编辑建议先用小范围同步规则验证。当前安装包尚未取得 Windows Authenticode 代码签名，请只从官方 Release 下载并核对 SHA-256。
+
+## 安全与反馈
+
+请不要在公开 Issue 中提交 Cookie、二维码、账号标识、文件名、绝对路径、分享链接、提取码、数据库或原始日志。软件内“导出诊断”会限制字段范围，导出后仍请检查和脱敏。详情见 [安全说明](SECURITY.md)。
+
+作者：[马蹄疾](https://space.bilibili.com/3546747290782061)。仓库目前尚未声明开源许可证；公开源代码不等于授权第三方任意再分发、商用或改造。

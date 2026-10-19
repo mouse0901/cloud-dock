@@ -14,7 +14,7 @@ Copy-Item -LiteralPath (Join-Path $root ('work\desktop-build\CloudDock'+$version
 $csc=Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 & $csc /nologo /target:exe /platform:x64 ('/out:'+(Join-Path $root 'work\desktop-build\ReleaseHelper.exe')) (Join-Path $root 'tools\ReleaseHelper.cs') (Join-Path $root 'desktop\host\RuntimePaths.cs')
 if($LASTEXITCODE -ne 0){throw 'Release helper compilation failed'}
-& $csc /nologo /target:winexe /platform:x64 /optimize+ ('/out:'+(Join-Path $root 'work\desktop-build\UpdateLauncher.exe')) (Join-Path $root 'tools\UpdateLauncher.cs') (Join-Path $root 'desktop\host\UpdateLaunchPolicy.cs')
+& $csc /nologo /target:winexe /platform:x64 /optimize+ /reference:System.Core.dll /reference:System.Web.Extensions.dll ('/out:'+(Join-Path $root 'work\desktop-build\UpdateLauncher.exe')) (Join-Path $root 'tools\UpdateLauncher.cs') (Join-Path $root 'desktop\host\UpdateLaunchPolicy.cs') (Join-Path $root 'desktop\host\UpdateRecovery.cs')
 if($LASTEXITCODE -ne 0){throw 'Update launcher compilation failed'}
 Copy-Item -LiteralPath (Join-Path $root 'work\desktop-build\UpdateLauncher.exe') -Destination (Join-Path $root 'UpdateLauncher.exe') -Force
 $env:PYTHONUTF8='1'

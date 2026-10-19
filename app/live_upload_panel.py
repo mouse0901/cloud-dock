@@ -88,20 +88,20 @@ class LiveUploadMixin:
 
     def _uploads_changed(self):
         if self.closed: return
-        self._upload_host.controls = self.render_live_uploads().controls
+        if not getattr(self.page,'desktop_only',False):self._upload_host.controls = self.render_live_uploads().controls
         self.update()
         callback = getattr(self, 'on_transfer_change', None)
         if callback: callback()
 
     def _ensure_upload_worker(self):
-        if self.closed or self._uploads_stopping: return
+        if self.closed or self._uploads_stopping or getattr(self,'_queue_hold',False): return
         if self._upload_worker is None or self._upload_worker.done():
             self._upload_worker = asyncio.create_task(self._drive_upload_queue())
 
     async def _drive_upload_queue(self):
         try:
-            while not self.closed and not self._uploads_stopping:
-                job = next((j for j in self.upload_jobs if j.state == 'queued'), None)
+            while not self.closed and not self._uploads_stopping and not getattr(self,'_queue_hold',False):
+                job = next(iter(sorted((j for j in self.upload_jobs if j.state == 'queued'), key=lambda j:-getattr(j,'_priority',1))), None)
                 if job is None: break
                 try:
                     await asyncio.create_task(job.run())
@@ -122,7 +122,7 @@ class LiveUploadMixin:
 
     async def retry_upload(self, job, e=None):
         if (self.closed or self._uploads_stopping or job not in self.upload_jobs
-                or job.state != 'failed' or job.requires_restart): return
+                or job.state not in ('failed','paused') or job.requires_restart): return
         job.state, job.error = 'queued', ''
         self._uploads_changed()
         self._ensure_upload_worker()

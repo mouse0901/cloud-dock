@@ -1,0 +1,21 @@
+(async()=>{
+ const result={},delay=ms=>new Promise(r=>setTimeout(r,ms)),original=api,calls=[];
+ try{
+  $('#sheet').close();await delay(40);live.providers.baidu={...live.providers.baidu,connected:true,path:'/工作文件',context:'batch-qa',busy:false,share:false};
+  const files=[{id:'one',name:'拍摄计划.pdf',path:'/工作文件/拍摄计划.pdf',type:'document',size:2048},{id:'two',name:'分镜脚本.pdf',path:'/工作文件/分镜脚本.pdf',type:'document',size:4096}];
+  data.baidu['/工作文件']=files;live.providers.baidu.files=files;localGo('baidu','/工作文件');updateLiveControls();
+  const rows=Array.from({length:125},(_,i)=>({source:'/工作文件/素材-'+i+'.pdf',target:'/工作文件/项目-素材-'+i+'.pdf',size:100,directory:false,state:'pending',message:''}));
+  const entry={token:'batch-qa',provider:'baidu',kind:'rename',state:'ready',title:'批量重命名',at:Date.now()/1000,error:'',count:rows.length,counts:{pending:125},bytes:12500,offset:0,rows:rows.slice(0,100)};
+  api=async(action,args={})=>{calls.push([action,args]);if(action==='batch_prepare'||action==='batch_status')return {...entry,offset:args.offset||0,rows:rows.slice(args.offset||0,(args.offset||0)+100)};if(action==='batch_commit')return {...entry,state:'running'};if(action==='batch_result')return {...entry,state:'finished',counts:{completed:124,failed:1},rows:rows.slice(0,100).map((r,i)=>({...r,state:i===0?'failed':'completed',message:i===0?'项目已变化，请刷新核对':'操作完成'}))};if(action==='tools_browse')return {rows:[{name:'项目资料',path:'/项目资料'}]};return {};};
+  $('#upload').click();result.file_and_folder_upload=!!$('#batchPickFiles')&&!!$('#batchPickFolder');result.collision_choices=$$('#batchPolicy option').length===2;$('#sheet').close();await delay(30);
+  state.selected=new Set(['one','two']);syncSelection();result.multi_toolbar=!$('#batchMove').hidden&&!$('#batchRename').hidden;result.toolbar_fits=$('.commandbar').scrollWidth<=$('.commandbar').clientWidth+1;
+  $('#batchRename').click();$('#batchPrefix').value='项目-';$('#batchNumber').value='1';$('#batchRenamePreview').click();await delay(80);
+  result.preview_before_mutation=!!$('#batchCommit')&&!$('#batchCommit').disabled&&!calls.some(x=>x[0]==='batch_commit');result.rules_forwarded=calls.some(x=>x[0]==='batch_prepare'&&x[1].rename.prefix==='项目-'&&x[1].rename.start===1);result.preview_bounded=$$('#batchPreviewRows tbody tr').length===100;
+  $('#batchPreviewNext').click();await delay(40);result.preview_next_page=$$('#batchPreviewRows tbody tr').length===25&&$('#batchPreviewPage').textContent==='101–125 / 125';
+  $('#batchCommit').click();$('#batchCommit')?.click();await delay(100);result.confirm_once=calls.filter(x=>x[0]==='batch_commit').length===1;result.per_item_result=$('#batchResultSummary').textContent.includes('失败 1')&&$('#batchResultRows').textContent.includes('项目已变化');$('#sheet').close();await delay(40);
+  live.batches=[{...entry,state:'finished',counts:{completed:124,failed:1}}];live.tasks=[];changeView('transfers');result.results_reopen=!!$('[data-batch-report]');$('[data-batch-report]').click();await delay(50);result.result_dialog_reopens=!!$('#batchResultRows');$('#sheet').close();await delay(30);
+  localGo('baidu','/工作文件');state.selected=new Set(['one','two']);syncSelection();$('#batchMove').click();await delay(40);result.move_folder_browser=!!$('[data-batch-folder]');$('[data-batch-folder]').click();await delay(40);$('#batchMovePreview').click();await delay(60);result.move_target=calls.some(x=>x[0]==='batch_prepare'&&x[1].target==='/项目资料');$('#batchCancel').click();await delay(40);result.cancel_is_readonly=calls.filter(x=>x[0]==='batch_commit').length===1&&calls.some(x=>x[0]==='batch_cancel');
+  settings();$('[data-settings-tab=convenience]').click();result.wake_setting_present=!!$('#clipboardWakeSwitch');$('#sheet').close();await delay(40);
+  localGo('baidu','/工作文件');state.selected=new Set(['one','two']);syncSelection();document.dispatchEvent(new KeyboardEvent('keydown',{key:'F2',bubbles:true}));result.f2_batch=!!$('#batchRenamePreview');$('#batchPrefix').value='项目-';$('#batchRenamePreview').click();await delay(60);result.dialog_fits=$('#sheet').scrollWidth<=$('#sheet').clientWidth+1&&$('#sheet').getBoundingClientRect().right<innerWidth;
+ }catch(e){result.error=String(e);}finally{api=original;window.qaBatch=result;}
+})();

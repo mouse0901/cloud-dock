@@ -67,6 +67,8 @@ class FeedbackTests(unittest.IsolatedAsyncioTestCase):
   from desktop.backend import Bridge,UiError
   from types import SimpleNamespace
   bridge=object.__new__(Bridge);bridge.features=SimpleNamespace(feedback=self.f)
+  from app.health import Health
+  bridge.health=Health();bridge.accounts_manager=SimpleNamespace(switching=False)
   result=await bridge.action({'action':'feedback_preferences','preferences':{'sound_volume':18}})
   self.assertEqual(result['preferences']['sound_volume'],18)
   self.f.publish('download','1 项下载完成');event=(await bridge.action({'action':'feedback_poll'}))['events'][0]

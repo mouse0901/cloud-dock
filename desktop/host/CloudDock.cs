@@ -71,7 +71,8 @@ partial class CloudWindow:Form {
     readonly bool startupLaunch;
     readonly System.Windows.Forms.Timer clipboardTimer=new System.Windows.Forms.Timer();
     readonly ShareLinkHistory clipboardHistory=new ShareLinkHistory();
-    bool clipboardEnabled=true,clipboardRegistered,clipboardObserved;
+    bool clipboardEnabled=true,clipboardWake=true,clipboardRegistered,clipboardObserved;
+    List<ShareLink> pendingClipboard;
     uint clipboardSequence;
     int clipboardRetries;
     DateTime clipboardChanged=DateTime.UtcNow;
@@ -79,12 +80,15 @@ partial class CloudWindow:Form {
     [DllImport("user32.dll")] static extern bool RemoveClipboardFormatListener(IntPtr window);
     [DllImport("user32.dll")] static extern uint GetClipboardSequenceNumber();
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr window);
     static string Q(string value){return "\""+(value??"").Replace("\"","\\\"")+"\"";}
 
     public CloudWindow(string folder,bool startup=false){
         startupLaunch=startup;startupRegistration=new StartupRegistration(Path.Combine(folder,"CloudDock.exe"));
         root=folder;url=Environment.GetEnvironmentVariable("CLOUD_DOCK_URL");nativeKey=Environment.GetEnvironmentVariable("CLOUD_DOCK_NATIVE_KEY");
-        Text="云屿 Cloud Dock · 0.6.8";ClientSize=new Size(1180,760);MinimumSize=new Size(980,680);StartPosition=FormStartPosition.CenterScreen;
+        Text="云屿 Cloud Dock · 1.0.0";var area=Screen.FromPoint(Cursor.Position).WorkingArea;
+        ClientSize=new Size(Math.Min(1280,Math.Max(640,area.Width-64)),Math.Min(740,Math.Max(480,area.Height-90)));
+        MinimumSize=new Size(Math.Min(980,area.Width-32),Math.Min(680,area.Height-40));StartPosition=FormStartPosition.CenterScreen;
         Icon=new Icon(Path.Combine(root,"assets","branding","cloud-dock.ico"));
         ReadPreferences();
         if(startupLaunch){WindowState=FormWindowState.Minimized;ShowInTaskbar=false;}
@@ -126,31 +130,41 @@ partial class CloudWindow:Form {
         FormClosing+=OnClosing;
         FormClosed+=(s,e)=>{clipboardTimer.Stop();clipboardTimer.Dispose();watchdog.Stop();watchdog.Dispose();if(activationWait!=null)activationWait.Unregister(null);if(exitWait!=null)exitWait.Unregister(null);tray.Visible=false;tray.Dispose();};
     }
-    protected override void OnHandleCreated(EventArgs e){base.OnHandleCreated(e);clipboardRegistered=AddClipboardFormatListener(Handle);}
+    protected override void OnHandleCreated(EventArgs e){base.OnHandleCreated(e);clipboardSequence=GetClipboardSequenceNumber();clipboardObserved=true;clipboardRegistered=AddClipboardFormatListener(Handle);}
     protected override void OnHandleDestroyed(EventArgs e){if(clipboardRegistered){RemoveClipboardFormatListener(Handle);clipboardRegistered=false;}base.OnHandleDestroyed(e);}
     protected override void WndProc(ref Message m){
         if(m.Msg==0x031D){clipboardChanged=DateTime.UtcNow;ScheduleClipboard();}
         base.WndProc(ref m);
     }
     void ScheduleClipboard(){
-        if(clipboardTimer==null||closing||!ready||!clipboardEnabled||!Visible||WindowState==FormWindowState.Minimized)return;
+        if(clipboardTimer==null||closing||!clipboardEnabled)return;
         clipboardRetries=0;clipboardTimer.Stop();clipboardTimer.Start();
     }
     void ReadClipboardLink(){
         clipboardTimer.Stop();
         if(!String.IsNullOrEmpty(Environment.GetEnvironmentVariable("CLOUD_DOCK_QA_LIFECYCLE")))return;
-        if(closing||!ready||!clipboardEnabled||!Visible||GetForegroundWindow()!=Handle||picking)return;
+        if(closing||!clipboardEnabled)return;
+        if(picking){clipboardTimer.Start();return;}
         uint sequence=GetClipboardSequenceNumber();if(clipboardObserved&&sequence==clipboardSequence)return;
         // If copied while hidden, offer only the latest change within ten minutes.
         if(clipboardObserved&&(DateTime.UtcNow-clipboardChanged).TotalMinutes>10){clipboardSequence=sequence;return;}
         try{
             string text=Clipboard.ContainsText(TextDataFormat.UnicodeText)?Clipboard.GetText(TextDataFormat.UnicodeText):"";
             clipboardObserved=true;clipboardSequence=sequence;
-            var links=ShareLink.ParseAll(text);var fresh=new List<ShareLink>();
-            foreach(var link in links)if(clipboardHistory.Accept(link))fresh.Add(link);
-            if(fresh.Count>0)Send(new {type="clipboardShares",links=fresh});
-            else if(links.Count==0)Send(new {type="clipboardClear"});
+            HandleClipboardText(text);
         }catch(ExternalException){if(++clipboardRetries<4)clipboardTimer.Start();}
+    }
+    void HandleClipboardText(string text){
+        if(closing||!clipboardEnabled)return;
+        var links=ShareLink.ParseAll(text);var fresh=new List<ShareLink>();
+        foreach(var link in links)if(clipboardHistory.Accept(link))fresh.Add(link);
+        if(fresh.Count>0){pendingClipboard=fresh;if(clipboardWake)RestoreWindow(false);SendPendingClipboard();}
+        else if(links.Count==0){pendingClipboard=null;Send(new {type="clipboardClear"});}
+    }
+    void SendPendingClipboard(){
+        if(!ready||pendingClipboard==null||!clipboardEnabled)return;
+        var links=pendingClipboard;pendingClipboard=null;
+        Send(new {type="clipboardShares",links=links});
     }
     void ReadPreferences(){
         try{
@@ -159,6 +173,7 @@ partial class CloudWindow:Form {
                 var p=json.Deserialize<Dictionary<string,object>>(File.ReadAllText(file));
                 closeToTray=Bool(p,"close_to_tray",true);reduced=Bool(p,"reduce_motion",false);
                 clipboardEnabled=Bool(p,"clipboard_links",true);
+                clipboardWake=Bool(p,"clipboard_wake",true);
                 string theme=p.ContainsKey("theme")?Convert.ToString(p["theme"]):"light";
                 dark=theme=="dark";
                 if(theme=="system")try{dark=Convert.ToInt32(Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize","AppsUseLightTheme",1))==0;}catch{}
@@ -347,7 +362,7 @@ partial class CloudWindow:Form {
         if(closing)return;
         openSettingsPending|=settings;Show();ShowInTaskbar=true;
         if(WindowState==FormWindowState.Minimized)WindowState=FormWindowState.Normal;
-        BringToFront();Activate();SetForegroundState(true);Timing("window_restored");
+        BringToFront();Activate();SetForegroundWindow(Handle);SetForegroundState(true);Timing("window_restored");
         if(ready && openSettingsPending){Send(new {type="openSettings"});openSettingsPending=false;}
         if(browserTask==null)await Setup();
     }
@@ -382,19 +397,24 @@ partial class CloudWindow:Form {
                 SetForegroundState(Visible && WindowState!=FormWindowState.Minimized);
                 if(openSettingsPending){Send(new {type="openSettings"});openSettingsPending=false;}
                 ScheduleClipboard();
+                SendPendingClipboard();
                 if(!qaStarted){qaStarted=true;try{await RunQa();}catch(Exception error){Timing("qa_failed_"+error.GetType().Name);}}return;
             }
             if(type=="startupMilestone"){
                 string phase=data.ContainsKey("phase")?Convert.ToString(data["phase"]):"";
+                if(phase=="workspace_ready")UpdateRecovery.Healthy(Program.Data,root);
                 if((phase=="workspace_ready"||phase=="accounts_settled"||phase=="files_ready")&&milestones.Add(phase))Timing(phase);return;
             }
             if(type=="desktopPreferences"){
-                closeToTray=Bool(data,"close_to_tray",closeToTray);clipboardEnabled=Bool(data,"clipboard_links",clipboardEnabled);if(!clipboardEnabled)clipboardTimer.Stop();dark=Bool(data,"dark",dark);reduced=Bool(data,"reduced",reduced);loading.SetAppearance(dark,reduced);return;
+                bool nextClipboard=Bool(data,"clipboard_links",clipboardEnabled);
+                if(nextClipboard!=clipboardEnabled){clipboardSequence=GetClipboardSequenceNumber();clipboardObserved=true;pendingClipboard=null;}
+                closeToTray=Bool(data,"close_to_tray",closeToTray);clipboardEnabled=nextClipboard;clipboardWake=Bool(data,"clipboard_wake",clipboardWake);if(!clipboardEnabled)clipboardTimer.Stop();dark=Bool(data,"dark",dark);reduced=Bool(data,"reduced",reduced);loading.SetAppearance(dark,reduced);return;
             }
             if(type=="openShareExternal"){
                 var link=ShareLink.Parse(data.ContainsKey("url")?Convert.ToString(data["url"]):"");
                 if(link!=null&&link.provider=="baidu")Process.Start(new ProcessStartInfo(link.url){UseShellExecute=true});return;
             }
+            if(await LongevityMessage(type,data))return;
             if(type=="exportDiagnostics"){
                 if(picking)return;picking=true;ownsPicker=true;
                 using(var save=new SaveFileDialog()){save.Title="导出诊断（不包含账号凭证或文件名）";save.Filter="诊断文件 (*.json)|*.json";save.FileName="CloudDock-diagnostics-"+DateTime.Now.ToString("yyyyMMdd-HHmmss")+".json";
@@ -426,14 +446,21 @@ partial class CloudWindow:Form {
                 int volume; if(!Int32.TryParse(Field(data,"volume"),out volume))return;
                 PlayFeedbackSound(Field(data,"kind"),volume);return;
             }
-            if(type=="dropFiles"){
+            if(type=="dropFiles"||type=="dropUpload"){
                 if(id.Length>32||e.AdditionalObjects==null||e.AdditionalObjects.Count<1||e.AdditionalObjects.Count>500)return;
                 var dropped=new List<string>();
                 foreach(var obj in e.AdditionalObjects){var file=obj as CoreWebView2File;
-                    if(file==null||!Path.IsPathRooted(file.Path)||!File.Exists(file.Path)||(File.GetAttributes(file.Path)&FileAttributes.ReparsePoint)!=0){Send(new {id=id,error="请拖入普通文件；文件夹请使用同步与备份。"});return;}
+                    if(file==null||!Path.IsPathRooted(file.Path)||(!File.Exists(file.Path)&&!(type=="dropUpload"&&Directory.Exists(file.Path)))||(File.GetAttributes(file.Path)&FileAttributes.ReparsePoint)!=0){Send(new {id=id,error="请选择普通文件或真实文件夹。"});return;}
                     dropped.Add(file.Path);
                 }
-                var selected=await Post("api/selection",new {kind="files",paths=dropped.ToArray()},true);selected["id"]=id;Send(selected);return;
+                var selected=await Post("api/selection",new {kind=type=="dropUpload"?"upload":"files",paths=dropped.ToArray()},true);selected["id"]=id;Send(selected);return;
+            }
+            if(type=="pickUploadFiles"||type=="pickUploadFolder"){
+                if(picking||id.Length>32)return;picking=true;ownsPicker=true;string[] uploads=null;
+                if(type=="pickUploadFiles")using(var dialog=new OpenFileDialog()){dialog.Title="选择上传文件";dialog.Multiselect=true;dialog.CheckFileExists=true;if(dialog.ShowDialog(this)==DialogResult.OK)uploads=dialog.FileNames;}
+                else using(var dialog=new FolderBrowserDialog()){dialog.Description="选择一次性上传的文件夹（包含子文件夹）";if(dialog.ShowDialog(this)==DialogResult.OK)uploads=new string[]{dialog.SelectedPath};}
+                if(uploads==null){Send(new {id=id,cancelled=true});return;}
+                var selected=await Post("api/selection",new {kind="upload",paths=uploads},true);selected["id"]=id;Send(selected);return;
             }
             if(picking||id.Length>32||(type!="pickFiles"&&type!="pickDirectory"&&type!="pickSyncFile"))return;
             picking=true;ownsPicker=true;string[] paths=null;
@@ -466,7 +493,7 @@ partial class CloudWindow:Form {
             if(!String.IsNullOrEmpty(url))await Task.WhenAny(Post("api/action",new {action="shutdown"}),Task.Delay(8000));
             if(backend!=null && !backend.HasExited)await Task.WhenAny(Task.Run(()=>backend.WaitForExit()),Task.Delay(8000));
         }catch{}
-        if(backend!=null && !backend.HasExited){closing=false;closeToTray=true;Text="云屿 Cloud Dock · 0.6.8";RestoreWindow(false);MessageBox.Show(this,"后台仍在保存或核对任务。请稍后再次退出；安装程序不会替换正在使用的文件。","云屿");return;}
+        if(backend!=null && !backend.HasExited){closing=false;closeToTray=true;Text="云屿 Cloud Dock · 1.0.0";RestoreWindow(false);MessageBox.Show(this,"后台仍在保存或核对任务。请稍后再次退出；安装程序不会替换正在使用的文件。","云屿");return;}
         done=true;tray.Visible=false;Timing("exit_saved");Close();
     }
     async Task RunQa(){
@@ -488,7 +515,7 @@ partial class CloudWindow:Form {
             await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,file);
         if(!String.IsNullOrEmpty(lifecycle)){
             await EnsureService();
-            var results=new Dictionary<string,object>();results["default_close_to_tray"]=closeToTray;
+            var results=new Dictionary<string,object>();results["default_close_to_tray"]=closeToTray;results["landscape_default"]=ClientSize.Width>ClientSize.Height*1.6;
             await view.CoreWebView2.ExecuteScriptAsync("changeView('backups');");await Task.Delay(200);
             results["sync_center"]=await view.CoreWebView2.ExecuteScriptAsync("Boolean(document.querySelector('#newSync') && document.querySelector('[data-new-kind=\"file\"]'))")=="true";
             await Task.Delay(250);
@@ -513,7 +540,7 @@ partial class CloudWindow:Form {
             await view.CoreWebView2.ExecuteScriptAsync("document.querySelector('#sheet').close();settings();document.querySelector('#clipboardSwitch').click();");await Task.Delay(500);
             results["release_controls"]=await view.CoreWebView2.ExecuteScriptAsync("Boolean(document.querySelector('#releaseNotes')&&document.querySelector('#exportDiagnostics'))")=="true";
             var diagnostic=await Post("api/action",new {action="diagnostics"});var diagnosticReport=(Dictionary<string,object>)diagnostic["report"];
-            results["diagnostics_allowlist"]=Convert.ToString(diagnosticReport["version"])=="0.6.8"&&!json.Serialize(diagnostic).Contains("download_dir");
+            results["diagnostics_allowlist"]=Convert.ToString(diagnosticReport["version"])=="1.0.0"&&!json.Serialize(diagnostic).Contains("download_dir");
             results["startup_setting"]=await view.CoreWebView2.ExecuteScriptAsync("Boolean(document.querySelector('#startupSwitch') && !document.querySelector('#startupSwitch').disabled)")=="true";
             results["clipboard_setting_off"]=await view.CoreWebView2.ExecuteScriptAsync("Boolean(live.clipboard_links===false && document.querySelector('#clipboardSwitch').getAttribute('aria-checked')==='false')")=="true";
             await view.CoreWebView2.ExecuteScriptAsync("document.querySelector('#clipboardSwitch').click();");await Task.Delay(500);
@@ -539,6 +566,27 @@ partial class CloudWindow:Form {
             await Post("api/action",new {action="desktop_preferences",close_to_tray=false});
             var prefs=json.Deserialize<Dictionary<string,object>>(File.ReadAllText(Path.Combine(Program.Data,"preferences.json")));
             results["tray_setting_persisted"]=!Bool(prefs,"close_to_tray",true);
+            clipboardEnabled=true;clipboardWake=true;
+            Hide();HandleClipboardText("https://pan.quark.cn/s/abcdef01?pwd=Ab12");await Task.Delay(100);
+            results["clipboard_restores_tray"]=Visible&&WindowState!=FormWindowState.Minimized;
+            Hide();HandleClipboardText("https://pan.quark.cn/s/abcdef01?pwd=Ab12");
+            results["clipboard_duplicate_keeps_tray"]=!Visible;
+            RestoreWindow(false);WindowState=FormWindowState.Minimized;
+            HandleClipboardText("https://pan.baidu.com/s/1abcdef02");await Task.Delay(100);
+            results["clipboard_restores_minimized"]=Visible&&WindowState!=FormWindowState.Minimized;
+            clipboardWake=false;Hide();HandleClipboardText("https://pan.quark.cn/s/abcdef03");
+            results["clipboard_wake_off_keeps_tray"]=!Visible;
+            clipboardEnabled=false;clipboardWake=true;HandleClipboardText("https://pan.quark.cn/s/abcdef04");
+            results["clipboard_disabled_keeps_tray"]=!Visible;
+            clipboardEnabled=true;HandleClipboardText("ordinary text");results["ordinary_copy_keeps_tray"]=!Visible;
+            RestoreWindow(false);ready=false;clipboardWake=false;
+            HandleClipboardText("https://pan.quark.cn/s/abcdef05");results["clipboard_pending_before_ui"]=pendingClipboard!=null;
+            HandleClipboardText("ordinary text");results["clipboard_pending_cleared"]=pendingClipboard==null;
+            ready=true;clipboardWake=true;
+            await Post("api/action",new {action="desktop_preferences",clipboard_wake=false});
+            prefs=json.Deserialize<Dictionary<string,object>>(File.ReadAllText(Path.Combine(Program.Data,"preferences.json")));
+            results["clipboard_wake_setting_persisted"]=!Bool(prefs,"clipboard_wake",true);
+            await Post("api/action",new {action="desktop_preferences",clipboard_wake=true});
             // UI fixtures stay inside the opt-in QA process with an isolated profile.
             await view.CoreWebView2.ExecuteScriptAsync("refreshState=async()=>{}; api=async()=>({}); live.providers.baidu={...live.providers.baidu,connected:true,busy:false,path:'/工作文件',context:'qa',files:[]}; live.capacities={baidu:{state:'ready',total:1e12,used:4e11,free:6e11,checked:1},quark:{state:'disconnected'}}; data.baidu['/工作文件']=[{id:'qa-dir',name:'项目资料',path:'/工作文件/项目资料',type:'folder',size:0,date:'2026-10-17'},{id:'qa-file',name:'设计说明.pdf',path:'/工作文件/设计说明.pdf',type:'pdf',size:354000,date:'2026-10-16'}];localGo('baidu','/工作文件');updateLiveControls();");
             results["capacity_visible"]=await view.CoreWebView2.ExecuteScriptAsync("document.querySelector('[data-capacity=baidu]').textContent.includes('600.0 GB')")=="true";
@@ -554,10 +602,10 @@ partial class CloudWindow:Form {
             await Task.Delay(250);
             if(!String.IsNullOrEmpty(capture))using(var file=File.Create(capture+".transfers.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,file);
             await view.CoreWebView2.ExecuteScriptAsync("settings();document.querySelector('[data-settings-tab=storage]').click();");
-            results["settings_categories"]=await view.CoreWebView2.ExecuteScriptAsync("document.querySelectorAll('.settings-nav button').length===6 && !document.querySelector('[data-settings-panel=storage]').hidden && document.querySelector('[data-settings-panel=general]').hidden")=="true";
+            results["settings_categories"]=await view.CoreWebView2.ExecuteScriptAsync("document.querySelectorAll('[data-settings-tab]').length===6 && !document.querySelector('[data-settings-panel=storage]').hidden && document.querySelector('[data-settings-panel=general]').hidden")=="true";
             await Task.Delay(250);
             if(!String.IsNullOrEmpty(capture))using(var file=File.Create(capture+".storage.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,file);
-            await view.CoreWebView2.ExecuteScriptAsync("document.querySelector('#sheet').close();document.querySelector('[data-capacity=baidu]').click();");
+            await view.CoreWebView2.ExecuteScriptAsync("document.querySelector('#sheet').close();cloudDockCapacity('baidu');");
             results["membership_hidden"]=await view.CoreWebView2.ExecuteScriptAsync("!document.body.innerText.includes('VIP') && Boolean(document.querySelector('#capacityDetail'))")=="true";
             await Task.Delay(250);
             if(!String.IsNullOrEmpty(capture))using(var file=File.Create(capture+".capacity.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,file);
@@ -605,6 +653,84 @@ partial class CloudWindow:Form {
                 if(!String.IsNullOrEmpty(capture))using(var image=File.Create(capture+".feedback.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
                 await view.CoreWebView2.ExecuteScriptAsync("document.querySelector('#sheet').close();");
             }
+            string batchQa=Path.Combine(root,"tests","qa_batch.js");
+            if(File.Exists(batchQa)){
+                await view.CoreWebView2.ExecuteScriptAsync(File.ReadAllText(batchQa,Encoding.UTF8));
+                var batchWait=Stopwatch.StartNew();
+                while(batchWait.ElapsedMilliseconds<12000 && await view.CoreWebView2.ExecuteScriptAsync("Boolean(window.qaBatch)")!="true")await Task.Delay(100);
+                File.WriteAllText(lifecycle+".batch.json",await view.CoreWebView2.ExecuteScriptAsync("window.qaBatch||{timeout:true}"));
+                if(!String.IsNullOrEmpty(capture))using(var image=File.Create(capture+".batch.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+                await view.CoreWebView2.ExecuteScriptAsync("document.body.classList.add('dark')");await Task.Delay(150);
+                if(!String.IsNullOrEmpty(capture))using(var image=File.Create(capture+".batch-dark.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+                await view.CoreWebView2.ExecuteScriptAsync("document.body.classList.remove('dark');document.querySelector('#sheet').close();");
+            }
+            string organizeQa=Path.Combine(root,"tests","qa_organize.js");
+            if(File.Exists(organizeQa)){
+                await view.CoreWebView2.ExecuteScriptAsync(File.ReadAllText(organizeQa,Encoding.UTF8));
+                var organizeWait=Stopwatch.StartNew();
+                while(organizeWait.ElapsedMilliseconds<15000 && await view.CoreWebView2.ExecuteScriptAsync("Boolean(window.qaOrganize)")!="true")await Task.Delay(100);
+                File.WriteAllText(lifecycle+".organize.json",await view.CoreWebView2.ExecuteScriptAsync("window.qaOrganize||{timeout:true}"));
+                if(!String.IsNullOrEmpty(capture))using(var image=File.Create(capture+".organize.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+                await view.CoreWebView2.ExecuteScriptAsync("document.body.classList.add('dark')");await Task.Delay(150);
+                if(!String.IsNullOrEmpty(capture))using(var image=File.Create(capture+".organize-dark.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+                await view.CoreWebView2.ExecuteScriptAsync("document.body.classList.remove('dark');document.querySelector('#sheet').close();");
+            }
+            string longevityQa=Path.Combine(root,"tests","qa_longevity.js");
+            if(File.Exists(longevityQa)){
+                await view.CoreWebView2.ExecuteScriptAsync(File.ReadAllText(longevityQa,Encoding.UTF8));
+                var longevityWait=Stopwatch.StartNew();
+                while(longevityWait.ElapsedMilliseconds<15000 && await view.CoreWebView2.ExecuteScriptAsync("Boolean(window.qaLongevity)")!="true")await Task.Delay(100);
+                File.WriteAllText(lifecycle+".longevity.json",await view.CoreWebView2.ExecuteScriptAsync("window.qaLongevity||{timeout:true}"));
+                if(!String.IsNullOrEmpty(capture))using(var image=File.Create(capture+".longevity.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+                await view.CoreWebView2.ExecuteScriptAsync("document.querySelector('#sheet').close();");
+            }
+            string workspaceQa=Path.Combine(root,"tests","qa_workspace.js");
+            if(File.Exists(workspaceQa)){
+                await view.CoreWebView2.ExecuteScriptAsync(File.ReadAllText(workspaceQa,Encoding.UTF8));
+                var workspaceWait=Stopwatch.StartNew();
+                while(workspaceWait.ElapsedMilliseconds<12000 && await view.CoreWebView2.ExecuteScriptAsync("Boolean(window.qaWorkspace)")!="true")await Task.Delay(100);
+                File.WriteAllText(lifecycle+".workspace.json",await view.CoreWebView2.ExecuteScriptAsync("window.qaWorkspace||{timeout:true}"));
+                if(!String.IsNullOrEmpty(capture))using(var image=File.Create(capture+".workspace.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+                await view.CoreWebView2.ExecuteScriptAsync("document.body.classList.add('dark')");await Task.Delay(150);
+                if(!String.IsNullOrEmpty(capture))using(var image=File.Create(capture+".workspace-dark.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+                await view.CoreWebView2.ExecuteScriptAsync("document.body.classList.remove('dark');document.querySelector('#sheet').close();");
+            }
+            string usabilityQa=Path.Combine(root,"tests","qa_usability.js");
+            if(File.Exists(usabilityQa)){
+                await view.CoreWebView2.ExecuteScriptAsync(File.ReadAllText(usabilityQa,Encoding.UTF8));
+                var usabilityWait=Stopwatch.StartNew();
+                while(usabilityWait.ElapsedMilliseconds<12000 && await view.CoreWebView2.ExecuteScriptAsync("Boolean(window.qaUsabilityFilesReady||window.qaUsability)")!="true")await Task.Delay(100);
+                if(!String.IsNullOrEmpty(capture))using(var image=File.Create(capture+".usability-files.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+                await view.CoreWebView2.ExecuteScriptAsync("window.qaUsabilityContinue=true");
+                while(usabilityWait.ElapsedMilliseconds<16000 && await view.CoreWebView2.ExecuteScriptAsync("Boolean(window.qaUsability)")!="true")await Task.Delay(100);
+                File.WriteAllText(lifecycle+".usability.json",await view.CoreWebView2.ExecuteScriptAsync("window.qaUsability||{timeout:true}"));
+                if(!String.IsNullOrEmpty(capture))using(var image=File.Create(capture+".usability-settings.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+                await view.CoreWebView2.ExecuteScriptAsync("document.body.classList.add('dark')");await Task.Delay(150);
+                if(!String.IsNullOrEmpty(capture))using(var image=File.Create(capture+".usability-dark.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+                await view.CoreWebView2.ExecuteScriptAsync("document.body.classList.remove('dark');document.querySelector('#sheet').close();");
+            }
+            string polishQa=Path.Combine(root,"tests","qa_polish.js");
+            if(File.Exists(polishQa)){
+                await view.CoreWebView2.ExecuteScriptAsync(File.ReadAllText(polishQa,Encoding.UTF8));
+                var polishWait=Stopwatch.StartNew();
+                while(polishWait.ElapsedMilliseconds<12000 && await view.CoreWebView2.ExecuteScriptAsync("Boolean(window.qaPolishTransferReady||window.qaPolish)")!="true")await Task.Delay(100);
+                if(!String.IsNullOrEmpty(capture))using(var image=File.Create(capture+".polish-transfers.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+                await view.CoreWebView2.ExecuteScriptAsync("window.qaPolishContinue=true");
+                while(polishWait.ElapsedMilliseconds<16000 && await view.CoreWebView2.ExecuteScriptAsync("Boolean(window.qaPolish)")!="true")await Task.Delay(100);
+                File.WriteAllText(lifecycle+".polish.json",await view.CoreWebView2.ExecuteScriptAsync("window.qaPolish||{timeout:true}"));
+                if(!String.IsNullOrEmpty(capture))using(var image=File.Create(capture+".polish-settings.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+                await view.CoreWebView2.ExecuteScriptAsync("document.body.classList.add('dark')");await Task.Delay(150);
+                if(!String.IsNullOrEmpty(capture))using(var image=File.Create(capture+".polish-dark.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+                await view.CoreWebView2.ExecuteScriptAsync("document.body.classList.remove('dark');document.querySelector('#sheet').close();");
+            }
+            ClientSize=new Size(1280,740);
+            await view.CoreWebView2.ExecuteScriptAsync("settings()");
+            foreach(double factor in new double[]{1.25,1.5,2.0}){
+                view.ZoomFactor=factor;await Task.Delay(250);
+                results["settings_zoom_"+(int)(factor*100)]=await view.CoreWebView2.ExecuteScriptAsync("(()=>{const d=document.querySelector('#sheet'),p=document.querySelector('.settings-panels'),b=document.querySelector('#closeSheet').getBoundingClientRect();return document.documentElement.scrollWidth<=innerWidth+1&&p.scrollWidth<=p.clientWidth+1&&b.right<=innerWidth&&b.bottom<=innerHeight&&d.open})()")=="true";
+                if(factor==2.0&&!String.IsNullOrEmpty(capture))using(var image=File.Create(capture+".polish-zoom200.png"))await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
+            }
+            view.ZoomFactor=1.0;await view.CoreWebView2.ExecuteScriptAsync("document.querySelector('#sheet').close()");
             if(File.Exists(Path.Combine(root,"tests","qa_stability.js")))await RunStabilityQa(lifecycle);
             File.WriteAllText(lifecycle,json.Serialize(results));
         }
@@ -622,7 +748,7 @@ partial class CloudWindow:Form {
             await Task.Delay(150);int before=readyCount;
             var crash=view.CoreWebView2.CallDevToolsProtocolMethodAsync(method,"{}");
             // A crashed process cannot return a CDP result; observe any task fault.
-            crash.ContinueWith(t=>{var ignored=t.Exception;},TaskContinuationOptions.OnlyOnFaulted);
+            var observeCrash=crash.ContinueWith(t=>{var ignored=t.Exception;},TaskContinuationOptions.OnlyOnFaulted);
             await Task.WhenAny(crash,Task.Delay(1000));
             wait.Restart();while(wait.ElapsedMilliseconds<20000 && (!ready || readyCount<=before))await Task.Delay(100);
             result[method+"_recovered"]=ready && readyCount>before;

@@ -103,6 +103,7 @@ class LiveBrowserMixin(LiveUploadMixin):
         self.browser_count.value = f"显示 {len(rows)} / {len(self.browser_rows)} 项 · 已选 {len(self.browser_selected)} 个文件"
         self.browser_download.disabled = self.browser_busy or not self.browser_selected
         self.files.controls = []
+        if getattr(self.page,'desktop_only',False):return
         for item in rows:
             icon = ft.Icons.FOLDER_OUTLINED if item.is_dir else {"image":ft.Icons.IMAGE_OUTLINED,
                 "video":ft.Icons.MOVIE_OUTLINED,"document":ft.Icons.DESCRIPTION_OUTLINED}.get(item.category,ft.Icons.INSERT_DRIVE_FILE_OUTLINED)

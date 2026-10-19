@@ -90,7 +90,7 @@ class ExperienceTests(unittest.IsolatedAsyncioTestCase):
   self.ops=SimpleNamespace(stamp=lambda:self.stamp,identity='account',identity_stamp='A',account=AsyncMock(return_value='account'),guard=self.guard,list=AsyncMock(return_value=[self.file]))
   self.panel=SimpleNamespace(api=SimpleNamespace(authenticated=True),reader=object(),browser_busy=False,
     browser_rows=[self.folder],path='/',generation=1,jobs=[],upload_jobs=[],download_destination=self.root/'downloads',
-    start_download=AsyncMock(return_value=object()),_downloads_changed=Mock(),_ensure_live_worker=Mock())
+    start_download=AsyncMock(return_value=SimpleNamespace()),_downloads_changed=Mock(),_ensure_live_worker=Mock())
   self.features=SimpleNamespace(ops={'baidu':self.ops},store=self.store,accounts={},capture=Mock())
   self.bridge=SimpleNamespace(panels={'baidu':self.panel},features=self.features,context=lambda p:'view')
   self.exp=Experience(self.bridge);self.addAsyncCleanup(self.exp.close)

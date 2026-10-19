@@ -11,12 +11,14 @@ from app.providers.demo import atomic_json
 class Workspace:
     def __init__(self, data_dir: Path):
         self.data_dir = data_dir
-        self.settings = {"theme": "light", "view": "list", "sort_field":"name", "sort_desc":False, "concurrency": 3,
+        self.settings = {"theme": "light", "view": "list", "density":"comfortable", "grid_size":"medium", "full_names":False, "sort_field":"name", "sort_desc":False, "concurrency": 3,
                          "download_dir": str((data_dir / "downloads" if (data_dir.parent / "installed-data.txt").exists() or __import__("os").environ.get("CLOUD_DOCK_DATA_DIR") else data_dir.parent / "downloads").resolve()), "reduce_motion": False,
-                         "close_to_tray": True, "clipboard_links": True,
+                         "close_to_tray": True, "clipboard_links": True, "clipboard_wake": True,
                          "update_auto_check": True, "update_auto_download": False,
-                         "update_channel": "beta", "update_last_checked": 0,
+                         "update_channel": "stable", "update_last_checked": 0,
                          "update_skipped": "", "update_proxy_mode": "auto", "update_proxy_url": ""}
+        from app.layout_preferences import DEFAULTS, clean
+        self.settings.update(DEFAULTS)
         self.transfers: list[Transfer] = []
         self._save_lock = asyncio.Lock()
         try:
@@ -24,12 +26,16 @@ class Workspace:
             if isinstance(saved.get("feedback"),dict):
                 from desktop.feedback import preferences
                 self.settings["feedback"] = preferences(saved)
+            self.settings.update(clean(saved))
             download_dir = saved.get("download_dir")
             if isinstance(download_dir,str) and "\x00" not in download_dir and Path(download_dir).is_absolute():
                 self.settings["download_dir"] = download_dir
             if type(saved.get("completion_sound")) is bool:self.settings["completion_sound"]=saved["completion_sound"]
+            for key in ('quick_download','download_directory_confirmed'):
+                if type(saved.get(key)) is bool:self.settings[key]=saved[key]
             if type(saved.get("close_to_tray")) is bool:self.settings["close_to_tray"]=saved["close_to_tray"]
             if type(saved.get("clipboard_links")) is bool:self.settings["clipboard_links"]=saved["clipboard_links"]
+            if type(saved.get("clipboard_wake")) is bool:self.settings["clipboard_wake"]=saved["clipboard_wake"]
             if type(saved.get("update_auto_check")) is bool:self.settings["update_auto_check"]=saved["update_auto_check"]
             if type(saved.get("update_auto_download")) is bool:self.settings["update_auto_download"]=saved["update_auto_download"]
             if saved.get("update_channel") in {"stable", "beta"}:self.settings["update_channel"]=saved["update_channel"]
@@ -41,6 +47,9 @@ class Workspace:
                 self.settings["reduce_motion"] = saved["reduce_motion"]
             if saved.get("theme") in {"light", "dark", "system"}:
                 self.settings["theme"] = saved["theme"]
+            if saved.get("density") in {"comfortable","compact"}:self.settings["density"]=saved["density"]
+            if saved.get("grid_size") in {"small","medium","large"}:self.settings["grid_size"]=saved["grid_size"]
+            if type(saved.get("full_names")) is bool:self.settings["full_names"]=saved["full_names"]
             if saved.get("view") in {"list", "grid"}:
                 self.settings["view"] = saved["view"]
             if saved.get('sort_field') in {'name','size','date'}:self.settings['sort_field']=saved['sort_field']

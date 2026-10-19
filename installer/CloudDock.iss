@@ -12,7 +12,7 @@
 AppId={{28AE1E10-53D3-43F6-9B41-E39A7D629C61}
 AppName=云屿 Cloud Dock
 AppVersion={#AppVersion}
-AppVerName=云屿 Cloud Dock {#AppVersion} 更新测试版
+AppVerName=云屿 Cloud Dock {#AppVersion}
 DefaultDirName={localappdata}\Programs\CloudDock
 DefaultGroupName=云屿 Cloud Dock
 PrivilegesRequired=lowest
@@ -40,7 +40,7 @@ Name: "chinesesimp"; MessagesFile: "ChineseSimplified.isl"
 [Tasks]
 Name: desktopicon; Description: "创建桌面快捷方式"; Flags: unchecked
 [Files]
-Source: "{#Stage}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "CHECKSUMS.sha256,START.cmd"
+Source: "{#Stage}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#Build}\ReleaseHelper.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Build}\UpdateLauncher.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Build}\ReleaseHelper.exe"; Flags: dontcopy

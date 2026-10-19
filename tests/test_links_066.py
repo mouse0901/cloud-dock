@@ -106,11 +106,42 @@ class NativeTransferTests(unittest.IsolatedAsyncioTestCase):
     self.assertEqual((await job.run()).read_bytes(),DATA);self.assertEqual(resolve.await_count,3);self.assertEqual(job.connections,8)
 
 class DownloadPlans(unittest.IsolatedAsyncioTestCase):
+ async def test_quick_requires_explicit_defaults_and_setting(self):
+  token=await self.prepare()
+  result=await self.dialog.action({'action':'download_quick','token':token})
+  self.assertTrue(result['confirmation_required']);self.panel.start_download.assert_not_awaited()
+  with self.assertRaises(CloudOperationError):await self.dialog.action({'action':'download_preferences','quick':True})
+  await self.dialog.action({'action':'download_commit','token':token,'remember':True,'quick':True})
+  self.assertTrue(self.bridge.workspace.settings['quick_download'])
+  self.assertTrue(self.bridge.workspace.settings['download_directory_confirmed'])
+ async def test_quick_download_uses_one_shot_plan(self):
+  self.bridge.workspace.settings.update(quick_download=True,download_directory_confirmed=True)
+  token=await self.prepare();result=await self.dialog.action({'action':'download_quick','token':token})
+  self.assertEqual(result['count'],1)
+  with self.assertRaises(CloudOperationError):await self.dialog.action({'action':'download_quick','token':token})
+  self.assertEqual(self.panel.start_download.await_count,1)
+ async def test_quick_conflict_folder_share_and_account_change_need_confirmation(self):
+  self.bridge.workspace.settings.update(quick_download=True,download_directory_confirmed=True)
+  (self.root/'downloads').mkdir();(self.root/'downloads/a.txt').write_text('existing')
+  token=await self.prepare();result=await self.dialog.action({'action':'download_quick','token':token})
+  self.assertTrue(result['confirmation_required']);self.assertEqual((self.root/'downloads/a.txt').read_text(),'existing')
+  for ids in (['2'],['1','2']):
+   token=await self.prepare(ids);self.assertTrue((await self.dialog.action({'action':'download_quick','token':token}))['confirmation_required'])
+  token=await self.prepare();self.dialog.plans[token]['share_key']='share'
+  self.assertTrue((await self.dialog.action({'action':'download_quick','token':token}))['confirmation_required'])
+  self.stamp='other'
+  with self.assertRaises(CloudOperationError):await self.dialog.action({'action':'download_quick','token':token})
+  self.panel.start_download.assert_not_awaited()
+ async def test_quick_off_and_invalid_preference(self):
+  for value in ('true',1,None):
+   with self.assertRaises(CloudOperationError):await self.dialog.action({'action':'download_preferences','quick':value})
+  await self.dialog.action({'action':'download_preferences','quick':False})
+  self.assertFalse(self.bridge.workspace.settings['quick_download'])
  async def asyncSetUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.root=Path(self.tmp.name);self.stamp='A'
   self.ops=SimpleNamespace(account=AsyncMock(return_value='account'),stamp=lambda:self.stamp,guard=self.guard,list=AsyncMock(return_value=[]))
   self.file=CloudFile('1','baidu','/docs/a.txt',False,2);self.folder=CloudFile('2','baidu','/docs/dir',True)
-  self.panel=SimpleNamespace(api=SimpleNamespace(authenticated=True),reader=object(),generation=1,browser_busy=False,browser_rows=[self.file,self.folder],path='/docs',start_download=AsyncMock(return_value=object()),_downloads_changed=Mock(),_ensure_live_worker=Mock(),set_download_root=Mock())
+  self.panel=SimpleNamespace(api=SimpleNamespace(authenticated=True),reader=object(),generation=1,browser_busy=False,browser_rows=[self.file,self.folder],path='/docs',start_download=AsyncMock(return_value=SimpleNamespace()),_downloads_changed=Mock(),_ensure_live_worker=Mock(),set_download_root=Mock())
   self.bridge=SimpleNamespace(panels={'baidu':self.panel},features=SimpleNamespace(ops={'baidu':self.ops},accounts={},capture=Mock()),workspace=SimpleNamespace(settings={'download_dir':str(self.root/'downloads')},save=AsyncMock()),context=lambda p:'ctx',selected_paths=lambda s,k:[str(self.root/'chosen')])
   self.bridge.experience=Experience(self.bridge);self.dialog=DownloadDialog(self.bridge);self.addAsyncCleanup(self.dialog.close)
  def guard(self,stamp):

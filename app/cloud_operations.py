@@ -71,11 +71,12 @@ class CloudOperations:
             if limit is not None and len(result)>limit:raise CloudOperationError('文件夹内容超过本次扫描上限，请分批选择更小的文件夹。')
             if len(rows)<50:return result
         raise CloudOperationError('文件夹过大，请缩小备份范围。')
-    async def mkdir(self,parent,name):
+    async def mkdir(self,parent,name,*,exclusive=False):
         stamp=self.stamp();self.guard(stamp)
         if not name or name in ('.','..') or any(c in name for c in '/\\') or any(ord(c)<32 for c in name):raise CloudOperationError('文件夹名称无效。')
-        rows=await self.list(parent);found=next((x for x in rows if x.name==name),None)
+        rows=await self.list(parent);found=next((x for x in rows if x.name==name or exclusive and x.name.casefold()==name.casefold()),None)
         if found:
+            if exclusive:raise CloudOperationError('目标已出现同名项目，请重新预览。')
             if not found.is_dir:raise CloudOperationError('云端有同名文件，未覆盖。')
             return found
         self.guard(stamp)

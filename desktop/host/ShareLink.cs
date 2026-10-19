@@ -43,10 +43,15 @@ sealed class ShareLink {
 }
 
 sealed class ShareLinkHistory {
-    readonly HashSet<string> seen=new HashSet<string>();
-    readonly Queue<string> order=new Queue<string>();
+    readonly Dictionary<string,DateTime> seen=new Dictionary<string,DateTime>();
+    readonly Func<DateTime> clock;
+    public ShareLinkHistory(Func<DateTime> clock=null){this.clock=clock??(()=>DateTime.UtcNow);}
     public bool Accept(ShareLink link){
-        if(link==null||!seen.Add(link.Key))return false;
-        order.Enqueue(link.Key);while(order.Count>64)seen.Remove(order.Dequeue());return true;
+        if(link==null)return false;
+        var now=clock();DateTime last;
+        if(seen.TryGetValue(link.Key,out last)&&(now-last).TotalMinutes<10)return false;
+        seen[link.Key]=now;
+        if(seen.Count>64){string oldest=null;DateTime at=DateTime.MaxValue;foreach(var pair in seen)if(pair.Value<at){oldest=pair.Key;at=pair.Value;}if(oldest!=null)seen.Remove(oldest);}
+        return true;
     }
 }

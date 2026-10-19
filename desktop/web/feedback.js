@@ -25,7 +25,7 @@
   const p=prefs();target.innerHTML='<h3 class="setting-group-title">提示音</h3><p class="settings-description">云屿原创短音。同一批任务合并提醒，自动同步成功保持安静。</p>'+
    settingRow('download_sound','下载完成声音','文件已保存到本机后提醒')+settingRow('upload_sound','上传完成声音','网盘确认上传成功后提醒')+settingRow('error_sound','异常提醒声音','默认关闭；失败详情仍保留在任务和通知中')+
    `<div class="setting-line"><label for="feedbackVolume">提示音音量 <output id="volumeValue">${p.sound_volume}%</output></label><input id="feedbackVolume" type="range" min="0" max="100" value="${p.sound_volume}" aria-label="提示音音量"></div><div class="sound-previews">${[['download','试听下载'],['upload','试听上传'],['error','试听提醒']].map(([k,l])=>`<button class="quiet" data-sound-preview="${k}" ${native?'':'disabled'}>${l}</button>`).join('')}</div><h3 class="setting-group-title">通知</h3>`+
-   settingRow('download_notice','下载完成通知','在窗口内提醒，后台时显示桌面卡片')+settingRow('upload_notice','上传完成通知','可直接查看上传到的网盘位置')+settingRow('error_notice','传输与账号异常','下载失败、空间不足或登录失效时提醒')+settingRow('sync_notice','同步与备份待处理','合并提醒冲突和需要确认的项目')+settingRow('desktop_notifications','后台桌面通知','云屿在后台时显示；关闭此项不影响声音和通知记录')+settingRow('notification_filenames','通知显示文件名','默认只显示数量；关闭后清除通知记录中的文件名')+
+   settingRow('download_notice','下载完成通知','在窗口内提醒，后台时显示桌面卡片')+settingRow('upload_notice','上传完成通知','可直接查看上传到的网盘位置')+settingRow('error_notice','传输与账号异常','下载失败、空间不足或登录失效时提醒')+settingRow('sync_notice','同步待处理','合并提醒冲突和需要确认的项目')+settingRow('desktop_notifications','后台桌面通知','云屿在后台时显示；关闭此项不影响声音和通知记录')+settingRow('notification_filenames','通知显示文件名','默认只显示数量；关闭后清除通知记录中的文件名')+
    '<h3 class="setting-group-title">免打扰</h3>'+settingRow('quiet_enabled','定时免打扰','时段内不响铃、不弹出，通知记录照常保留')+
    `<div class="quiet-hours"><label>从 <input id="quietStart" type="time" value="${p.quiet_start}" aria-label="免打扰开始时间"></label><label>到 <input id="quietEnd" type="time" value="${p.quiet_end}" aria-label="免打扰结束时间"></label></div><p class="settings-description">相同时间表示全天免打扰。全屏或系统报告不宜打扰时也保持安静；手动试听除外。</p>`;
   target.querySelectorAll('[data-feedback-setting]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{const value=b.getAttribute('aria-checked')!=='true';await savePreference(b.dataset.feedbackSetting,value);b.classList.toggle('on',value);b.setAttribute('aria-checked',String(value));}catch(e){report(e);}finally{b.disabled=false;}});
@@ -39,6 +39,7 @@
  };$('#settings').onclick=settings;
 
  async function activate(item,quick=false){
+  if($('#sheet').open&&sheetKind!=='notifications'){toast('当前窗口还有操作，请先完成或关闭后再查看通知。');return;}
   notice.hidden=true;
   if(item.view==='notifications'){showNotifications();return;}
   if($('#sheet').open)$('#sheet').close();
@@ -68,6 +69,7 @@
   host.querySelectorAll('[data-notification]').forEach(b=>b.onclick=()=>activate(rows.find(r=>r.id===b.dataset.notification)));
  }
  async function showNotifications(){
+  if($('#sheet').open&&sheetKind!=='notifications'){toast('请先完成或关闭当前窗口，再查看通知。');return;}
   sheetKind='notifications';sheet('通知','<div class="notification-toolbar"><span>仅保存在本机 · 最近 100 条</span><button class="quiet" id="clearNotifications">清空记录</button></div><div id="notificationItems"></div>');
   $('#sheet').classList.add('notification-sheet');historyKey='';drawNotifications();
   $('#clearNotifications').onclick=async()=>{try{await api('feedback_clear');await refreshState();historyKey='';drawNotifications();}catch(e){report(e);}};

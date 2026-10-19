@@ -4,65 +4,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock,patch
 import httpx
 from app.durable_store import DurableStore
-from app.folder_backup import FolderBackup,scan
 from app.cloud_operations import CloudOperations,CloudOperationError
 from app.thumbnail_cache import ThumbnailCache
 from app.domain import CloudFile
 ROOT=Path(__file__).resolve().parents[1]
-class FakeOps:
- def __init__(self):self.api=SimpleNamespace();self.lock=asyncio.Lock();self.rows={};self.created=[];self.uid='account-a';self.session='session-a'
- async def account(self):return self.uid
- def stamp(self):return self.session
- async def list(self,path):return self.rows.get(path,[])
- async def ensure(self,path):self.created.append(path);self.rows.setdefault(path,[])
-class FakeJob:
- sequence=0
- def __init__(self,local,provider,directory,adapter,**kw):
-  self.local=local;self.directory=directory;self.kw=kw;self.remote_id=None;self.state='queued';self.speed=0;self.hashes={'sha1':'hash'}
- async def run(self):
-  FakeJob.sequence+=1;ops=self.kw.pop('_ops',None) or ACTIVE_OPS
-  if self.kw['current_owner']()!=self.kw['owner']:raise CloudOperationError('changed')
-  f=CloudFile(str(FakeJob.sequence),'baidu',self.directory+'/'+self.kw['remote_name'],False,self.local.stat().st_size,revision=str(FakeJob.sequence))
-  self.remote_id=f.id;ops.rows[self.directory].append(f);return f
-ACTIVE_OPS=None
-class BackupTests(unittest.IsolatedAsyncioTestCase):
- async def asyncSetUp(self):
-  global ACTIVE_OPS
-  self.tmp=tempfile.TemporaryDirectory(dir=ROOT/'work/test-runs');self.root=Path(self.tmp.name);self.local=self.root/'source';self.local.mkdir()
-  self.file=self.local/'a.txt';self.file.write_text('one');self.store=DurableStore(self.root/'db.sqlite3');self.ops=FakeOps();ACTIVE_OPS=self.ops
-  self.backup=FolderBackup(self.store,{'baidu':self.ops});self.plan=await self.backup.preview(self.local,'baidu','/');self.backup.create(self.plan)
-  self.mock=patch('app.folder_backup.UploadJob',FakeJob);self.mock.start()
- async def asyncTearDown(self):self.mock.stop();self.store.close();self.tmp.cleanup()
- async def settle(self):
-  await self.backup.run_once(self.store.get('backup',self.plan['id']))
-  self.backup.observed[self.plan['id']]={k:(v[0],v[1]-6) for k,v in self.backup.observed[self.plan['id']].items()}
-  await self.backup.run_once(self.store.get('backup',self.plan['id']))
- async def test_still_writing_waits(self):
-  await self.backup.run_once(self.plan);self.assertEqual(self.ops.created,[])
- async def test_versions_and_local_delete_keep_cloud(self):
-  await self.settle();self.file.write_text('two changed');await self.settle();rows=self.ops.rows[self.plan['target']];self.assertEqual(len(rows),2);self.assertNotEqual(rows[0].name,rows[1].name)
-  self.file.unlink();await self.settle();self.assertEqual(len(rows),2)
- async def test_restart_no_duplicate_upload(self):
-  await self.settle();self.backup=FolderBackup(self.store,{'baidu':self.ops});await self.settle();self.assertEqual(len(self.ops.rows[self.plan['target']]),1)
- async def test_other_account_never_uploads(self):
-  self.ops.uid='different-account';await self.backup.run_once(self.plan);self.assertEqual(self.ops.created,[]);self.assertIn('原账号',self.store.get('backup',self.plan['id'])['status'])
- async def test_missing_volume_does_not_delete_remote(self):
-  await self.settle();self.file.unlink();self.local.rmdir();await self.backup.run_once(self.plan);self.assertEqual(len(self.ops.rows[self.plan['target']]),1)
- async def test_root_identity_change_blocks(self):
-  self.plan['identity']=[999,999];await self.backup.run_once(self.plan);self.assertEqual(self.ops.created,[])
- async def test_remote_delete_excludes_local_update(self):
-  await self.settle();self.ops.rows[self.plan['target']]=[];self.file.write_text('updated');await self.settle();self.assertEqual(self.ops.rows[self.plan['target']],[]);self.assertEqual(self.store.all('backup_file')[0]['state'],'excluded')
- async def test_unknown_commit_does_not_duplicate(self):
-  await self.settle();record=self.store.all('backup_file')[0];record.update(state='pending',remote_id=None);self.store.put('backup_file',record['id'],record)
-  await self.settle();self.assertEqual(len(self.ops.rows[self.plan['target']]),1);self.assertEqual(self.store.all('backup_file')[0]['state'],'excluded')
- async def test_pause_persists(self):
-  await self.backup.set_enabled(self.plan['id'],False);await self.backup.run_once(self.store.get('backup',self.plan['id']));self.assertEqual(self.ops.created,[])
- async def test_overlap_rejected(self):
-  with self.assertRaises(CloudOperationError):await self.backup.preview(self.local,'baidu','/')
- async def test_temp_files_ignored(self):
-  (self.local/'a.part').write_text('busy');(self.local/'~$doc.docx').write_text('busy');files,n=scan(self.local);self.assertEqual(list(files),['a.txt']);self.assertEqual(n,2)
- async def test_database_survives_reopen(self):
-  self.store.close();self.store=DurableStore(self.root/'db.sqlite3');self.assertEqual(self.store.get('backup',self.plan['id'])['account'],'account-a')
 class ThumbnailTests(unittest.IsolatedAsyncioTestCase):
  async def asyncSetUp(self):
   self.tmp=tempfile.TemporaryDirectory(dir=ROOT/'work/test-runs');self.cache=ThumbnailCache(self.tmp.name)
