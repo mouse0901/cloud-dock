@@ -146,6 +146,7 @@ class Bridge:
                 'close_to_tray':self.workspace.settings.get('close_to_tray',True),
                 'clipboard_links':self.workspace.settings.get('clipboard_links',True),
                 'clipboard_wake':self.workspace.settings.get('clipboard_wake',True),
+                'link_auto_save':self.workspace.settings.get('link_auto_save',True),
                 'batches':self.batches.summaries(),'cross_copies':self.cross.summaries(),
                 'providers':providers,'tasks':self.tasks(),'download_dir':self.workspace.settings['download_dir'],
                 'quick_download':self.workspace.settings.get('quick_download',False),
@@ -153,7 +154,7 @@ class Bridge:
                 'favorites':self.experience.favorites() if self.features else [],
                 'file_view':{k:self.workspace.settings.get(k,v) for k,v in {'view':'list','sort_field':'name','sort_desc':False,'density':'comfortable','grid_size':'medium','full_names':False,**LAYOUT_DEFAULTS}.items()},
                 'update':self.updates.snapshot() if self.updates else {'status':'initializing','current':'1.0.0','enabled':False},
-                'version':'1.0.0','migration_notice':(self.workspace.data_dir/'migration.json').exists(),'theme':self.workspace.settings.get('theme','light'),'reduced':self.workspace.settings.get('reduce_motion',False)}
+                'version':self.updates.state['current'] if self.updates else '1.0.1-beta.1','migration_notice':(self.workspace.data_dir/'migration.json').exists(),'theme':self.workspace.settings.get('theme','light'),'reduced':self.workspace.settings.get('reduce_motion',False)}
         self.health.last_snapshot_ms=round((time.monotonic()-snapshot_started)*1000,2)
         return result
     def selected_paths(self,key,kind):
@@ -384,7 +385,7 @@ class Handler(BaseHTTPRequestHandler):
         if path=='cloud-dock.ico':return self.respond(200,(ROOT/'assets/branding/cloud-dock.ico').read_bytes(),'image/x-icon')
         allowed={'':'index.html','index.html':'index.html','app.js':'app.js','prototype.css':'prototype.css','desktop.css':'desktop.css','theme-reveal.js':'theme-reveal.js','theme-reveal.css':'theme-reveal.css','cloud-dock.png':'cloud-dock.png','features.js':'features.js','features.css':'features.css','lifecycle.js':'lifecycle.js','clipboard.js':'clipboard.js','sync.js':'sync.js','sync.css':'sync.css','startup.js':'startup.js','update.js':'update.js','update.css':'update.css','experience.js':'experience.js','experience.css':'experience.css','productivity.js':'productivity.js','productivity.css':'productivity.css'}
         allowed.update({'feedback.js':'feedback.js','feedback.css':'feedback.css','share-workspace.js':'share-workspace.js','share-workspace.css':'share-workspace.css','batch.js':'batch.js','batch.css':'batch.css'})
-        allowed.update({x:x for x in ('workspace.css','browser-workspace.js','transfer-workspace.js','organize.js','organize.css','sync-review.js','aggregate.js','longevity.js','longevity.css','usability.js','usability.css','product-polish.js','product-polish.css')})
+        allowed.update({x:x for x in ('workspace.css','browser-workspace.js','transfer-workspace.js','organize.js','organize.css','sync-review.js','aggregate.js','longevity.js','longevity.css','usability.js','usability.css','product-polish.js','product-polish.css','link-library.js','link-library.css')})
         if path not in allowed:return self.respond(404,{'error':'Not found'})
         file=ROOT/'desktop/web'/allowed[path]
         qa=os.environ.get('CLOUD_DOCK_QA_TIMINGS')

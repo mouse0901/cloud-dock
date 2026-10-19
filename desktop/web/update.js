@@ -1,6 +1,6 @@
 // Signed GitHub releases are checked after the window is interactive.
 (()=>{
- const native=window.chrome?.webview;let announced='',installing=false;
+ const native=window.chrome?.webview;let announced='',installing=false,channelSaving=false,requestedChannel=null,savingChannel=null;
  function statusText(u){
   if(!u?.enabled)return '更新源尚未连接；建立 GitHub 发布仓库后启用。';
   if(u.status==='checking')return '正在检查更新…';
@@ -17,24 +17,41 @@
   try{const result=await api('update_install');if(!native)throw Error('请在 Windows 桌面程序中安装更新');native.postMessage({type:'installUpdate',...result.update});}
   catch(error){installing=false;report(error);await refreshState();renderUpdate();}
  }
+ async function chooseChannel(channel){
+  requestedChannel=channel;renderUpdate();if(channelSaving)return;channelSaving=true;
+  try{
+   while(requestedChannel){
+    const target=requestedChannel;requestedChannel=null;savingChannel=target;
+    try{await api('update_preferences',{channel:target});await refreshState();
+     if(!requestedChannel)await api('update_check');
+    }catch(e){report(e);await refreshState();}
+   }
+  }finally{savingChannel=null;channelSaving=false;renderUpdate();}
+ }
  function renderUpdate(){
   const host=$('#updateCard');if(!host)return;const u=live?.update||{};
-  const progress=u.status==='downloading'?`<div class="update-progress" aria-label="更新下载进度"><span style="width:${Math.max(0,Math.min(100,(u.progress||0)*100))}%"></span></div>`:'';
-  const notes=u.notes?`<div class="update-notes">${esc(u.notes)}</div>`:'';
-  const route=u.route?`<small class="update-route">连接：${esc(u.route)}</small>`:'';
+  if(!host.dataset.ready){
+   host.dataset.ready='true';
+   host.innerHTML='<div class="update-card-head"><div><strong id="updateInstalled"></strong><small id="updateStatus"></small><small id="updateRoute" class="update-route"></small></div></div><div class="update-channel-label">接收更新的通道</div><div class="update-channel-group" role="group" aria-label="更新通道"><button type="button" data-update-channel="stable">正式版</button><button type="button" data-update-channel="beta">测试版</button></div><small class="update-channel-help">切换只影响以后接收的更新，不会更换当前安装版本。</small><div class="update-progress" id="updateProgress" aria-label="更新下载进度"><span></span></div><div class="update-notes" id="updateNotes"></div><div class="update-actions" id="updateActions"></div>';
+   host.querySelectorAll('[data-update-channel]').forEach(b=>b.onclick=()=>chooseChannel(b.dataset.updateChannel));
+   $('#updateActions').onclick=e=>{const id=e.target.closest('button')?.id;if(!id)return;
+    if(id==='installUpdate')installNow();else if(id==='installLater')invoke('update_install_when_idle').then(()=>toast('任务安全结束后将自动安装并重启'));
+    else invoke(({checkUpdate:'update_check',downloadUpdate:'update_download',cancelUpdate:'update_cancel',skipUpdate:'update_skip'})[id]);};
+  }
+  $('#updateInstalled').textContent='当前安装：云屿 '+(u.current||live?.version||'');
+  $('#updateStatus').textContent=channelSaving?'正在保存更新通道…':statusText(u);
+  $('#updateStatus').classList.toggle('update-error',u.status==='error');
+  $('#updateRoute').textContent=u.route?'连接：'+u.route:'';
+  const chosen=requestedChannel||savingChannel||u.channel;
+  host.querySelectorAll('[data-update-channel]').forEach(b=>{const yes=b.dataset.updateChannel===chosen;b.classList.toggle('active',yes);b.setAttribute('aria-pressed',String(yes));b.disabled=u.status==='downloading';});
+  $('#updateProgress').hidden=u.status!=='downloading';$('#updateProgress span').style.width=Math.max(0,Math.min(100,(u.progress||0)*100))+'%';
+  $('#updateNotes').textContent=u.notes||'';$('#updateNotes').hidden=!u.notes;
   let actions=`<button class="quiet" id="checkUpdate" ${!u.enabled||u.status==='checking'||u.status==='downloading'?'disabled':''}>检查更新</button>`;
-  if(u.status==='available'||u.status==='error'&&u.available)actions+=`<button class="primary" id="downloadUpdate">下载更新</button>`;
-  if(u.status==='downloading')actions+=`<button class="quiet" id="cancelUpdate">暂停下载</button>`;
-  if(u.status==='downloaded'&&u.install_supported)actions+=u.can_install?`<button class="primary" id="installUpdate">安装并重启</button>`:`<button class="primary" id="installLater">任务完成后安装</button>`;
-  if(u.available&&u.status!=='downloaded'&&u.status!=='downloading')actions+=`<button class="quiet" id="skipUpdate">跳过此版本</button>`;
-  host.innerHTML=`<div class="update-card-head"><div><strong>云屿 ${esc(u.current||live?.version||'')}</strong><small class="${u.status==='error'?'update-error':''}">${esc(statusText(u))}</small>${route}</div><select id="updateChannel" class="update-channel" aria-label="更新通道"><option value="stable" ${u.channel==='stable'?'selected':''}>正式版</option><option value="beta" ${u.channel!=='stable'?'selected':''}>测试版</option></select></div>${progress}${notes}<div class="update-actions">${actions}</div>`;
-  $('#checkUpdate')?.addEventListener('click',()=>invoke('update_check'));
-  $('#downloadUpdate')?.addEventListener('click',()=>invoke('update_download'));
-  $('#cancelUpdate')?.addEventListener('click',()=>invoke('update_cancel'));
-  $('#skipUpdate')?.addEventListener('click',()=>invoke('update_skip'));
-  $('#installUpdate')?.addEventListener('click',installNow);
-  $('#installLater')?.addEventListener('click',async()=>{await invoke('update_install_when_idle');toast('任务安全结束后将自动安装并重启');});
-  $('#updateChannel').onchange=e=>invoke('update_preferences',{channel:e.target.value});
+  if(u.status==='available'||u.status==='error'&&u.available)actions+='<button class="primary" id="downloadUpdate">下载更新</button>';
+  if(u.status==='downloading')actions+='<button class="quiet" id="cancelUpdate">暂停下载</button>';
+  if(u.status==='downloaded'&&u.install_supported)actions+=u.can_install?'<button class="primary" id="installUpdate">安装并重启</button>':'<button class="primary" id="installLater">任务完成后安装</button>';
+  if(u.available&&u.status!=='downloaded'&&u.status!=='downloading')actions+='<button class="quiet" id="skipUpdate">跳过此版本</button>';
+  if($('#updateActions').dataset.html!==actions){$('#updateActions').innerHTML=actions;$('#updateActions').dataset.html=actions;}
  }
  const previous=settings;
  settings=function(){

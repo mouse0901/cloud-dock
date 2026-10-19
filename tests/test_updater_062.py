@@ -146,5 +146,37 @@ class UpdaterTests(unittest.TestCase):
             self.assertEqual(workspace.settings["update_proxy_url"],"http://127.0.0.1:19828")
             self.assertEqual(service.snapshot()["proxy_mode"],"manual")
 
+    def test_channel_save_failure_restores_previous_choice(self):
+        class Workspace:
+            def __init__(self, folder):
+                self.data_dir=Path(folder);self.settings={"update_channel":"stable"}
+            async def save(self): raise OSError("disk full")
+        with tempfile.TemporaryDirectory() as folder:
+            workspace=Workspace(folder);service=UpdateService(workspace,lambda:False,UpdateClient(self.source))
+            with self.assertRaises(OSError):asyncio.run(service.preferences({"channel":"beta"}))
+            self.assertEqual(workspace.settings["update_channel"],"stable")
+            self.assertEqual(service.snapshot()["channel"],"stable")
+
+    def test_previous_channel_check_cannot_replace_new_selection(self):
+        class Workspace:
+            def __init__(self, folder):
+                self.data_dir=Path(folder);self.settings={"update_channel":"stable"}
+            async def save(self):pass
+        config=json.loads(json.dumps(self.source));config["enabled"]=True
+        with tempfile.TemporaryDirectory() as folder:
+            started=threading.Event();release=threading.Event()
+            client=UpdateClient(config)
+            def slow_check(channel):
+                started.set();release.wait(2);return None
+            client.check=slow_check
+            workspace=Workspace(folder);service=UpdateService(workspace,lambda:False,client)
+            async def run():
+                await service.check();old=service.task
+                self.assertTrue(await asyncio.to_thread(started.wait,1))
+                await service.preferences({"channel":"beta"});release.set();await old
+                self.assertEqual(service.snapshot()["channel"],"beta")
+                self.assertEqual(service.snapshot()["status"],"idle")
+            asyncio.run(run())
+
 
 if __name__ == "__main__": unittest.main()

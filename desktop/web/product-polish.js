@@ -4,10 +4,9 @@
  const reduced=()=>document.body.classList.contains('reduced')||matchMedia('(prefers-reduced-motion: reduce)').matches;
  const account=p=>live?.providers?.[p]?.account_name||'当前账号';
  // One navigation entry, with direct paste and encrypted saved links together.
- $('#linkInbox').hidden=true;$('#openLinks span').textContent='链接';$('#openLinks').title='打开或管理网盘链接（Ctrl + Shift + L）';
+ $('#linkInbox').hidden=false;$('#linkInbox span').textContent='链接库';$('#openLinks span').textContent='打开链接';$('#openLinks').title='粘贴并打开网盘链接（Ctrl + Shift + L）';
  const oldShare=window.openShareWorkspace;
- window.openShareWorkspace=function(...args){oldShare(...args);const bar=document.createElement('div');bar.className='link-hub-tabs';bar.innerHTML='<strong>打开链接</strong><button class="quiet" id="savedLinks">已保存的链接</button>';$('#sheetBody').prepend(bar);$('#savedLinks').onclick=()=>{const text=$('#shareInput')?.value||'',password=$('#sharePassword')?.value||'';window.cloudDockLinkDraft={text,password};window.cloudDockInbox();};const draft=window.cloudDockLinkDraft;if(!args[0]&&draft){const input=$('#shareInput');if(input){input.value=draft.text;}if($('#sharePassword'))$('#sharePassword').value=draft.password;}};
- const oldInbox=window.cloudDockInbox;window.cloudDockInbox=function(){oldInbox();const b=document.createElement('button');b.className='quiet';b.id='linksPaste';b.textContent='粘贴并打开链接';b.onclick=()=>window.openShareWorkspace();$('#sheetBody').prepend(b);};
+ window.openShareWorkspace=function(...args){oldShare(...args);const draft=window.cloudDockLinkDraft;if(!args[0]&&draft){const input=$('#shareInput');if(input)input.value=draft.text;if($('#sharePassword'))$('#sharePassword').value=draft.password;}};
  // Account controls are separate siblings of the navigation button, never nested.
  for(const nav of $$('.nav.provider')){const p=nav.dataset.provider,wrap=document.createElement('div');wrap.className='provider-entry';nav.before(wrap);wrap.append(nav);const b=document.createElement('button');b.className='provider-account icon-button';b.setAttribute('aria-label',names[p]+'的账号与空间');b.title='账号与空间';b.textContent='···';b.onclick=()=>accounts(p);wrap.append(b);}
  // Keep secondary task actions accessible by keyboard, without a wall of buttons.

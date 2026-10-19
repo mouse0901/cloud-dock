@@ -13,7 +13,7 @@ class Workspace:
         self.data_dir = data_dir
         self.settings = {"theme": "light", "view": "list", "density":"comfortable", "grid_size":"medium", "full_names":False, "sort_field":"name", "sort_desc":False, "concurrency": 3,
                          "download_dir": str((data_dir / "downloads" if (data_dir.parent / "installed-data.txt").exists() or __import__("os").environ.get("CLOUD_DOCK_DATA_DIR") else data_dir.parent / "downloads").resolve()), "reduce_motion": False,
-                         "close_to_tray": True, "clipboard_links": True, "clipboard_wake": True,
+                         "close_to_tray": True, "clipboard_links": True, "clipboard_wake": True, "link_auto_save": True,
                          "update_auto_check": True, "update_auto_download": False,
                          "update_channel": "stable", "update_last_checked": 0,
                          "update_skipped": "", "update_proxy_mode": "auto", "update_proxy_url": ""}
@@ -36,6 +36,7 @@ class Workspace:
             if type(saved.get("close_to_tray")) is bool:self.settings["close_to_tray"]=saved["close_to_tray"]
             if type(saved.get("clipboard_links")) is bool:self.settings["clipboard_links"]=saved["clipboard_links"]
             if type(saved.get("clipboard_wake")) is bool:self.settings["clipboard_wake"]=saved["clipboard_wake"]
+            if type(saved.get("link_auto_save")) is bool:self.settings["link_auto_save"]=saved["link_auto_save"]
             if type(saved.get("update_auto_check")) is bool:self.settings["update_auto_check"]=saved["update_auto_check"]
             if type(saved.get("update_auto_download")) is bool:self.settings["update_auto_download"]=saved["update_auto_download"]
             if saved.get("update_channel") in {"stable", "beta"}:self.settings["update_channel"]=saved["update_channel"]

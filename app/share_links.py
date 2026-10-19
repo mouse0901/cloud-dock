@@ -27,6 +27,5 @@ def parse_links(text):
             if base in seen:continue
             seen.add(base)
             result.append({'provider':'baidu' if host=='pan.baidu.com' else 'quark','url':base+('?' + urlencode({'pwd':code}) if code else ''),'password':code})
-            if len(result)==20:break
         except (ValueError,UnicodeError):continue
     return result

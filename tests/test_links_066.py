@@ -22,7 +22,7 @@ class LinkParsing(unittest.TestCase):
  def test_legacy_and_unsafe(self):
   self.assertEqual(parse_links('https://pan.baidu.com/share/init?surl=abcdef&pwd=Ab12')[0]['url'],'https://pan.baidu.com/s/1abcdef?pwd=Ab12')
   for bad in ['https://pan.baidu.com.evil.test/s/1abcdef','https://pan.quark.cn@evil.test/s/abcdef12','https://pan.baidu.com:123/s/1abcdef','https://pan.baidu.com/s/1abcdef.exe','https://pan.quark.cn/s/abcdef12/extra','x'*16385,None]:self.assertEqual(parse_links(bad),[])
- def test_bounded(self):self.assertEqual(len(parse_links(' '.join('https://pan.quark.cn/s/abcdef%03d'%i for i in range(50)))),20)
+ def test_multiple_links_not_silently_truncated(self):self.assertEqual(len(parse_links(' '.join('https://pan.quark.cn/s/abcdef%03d'%i for i in range(50)))),50)
 
 class LocateTests(unittest.IsolatedAsyncioTestCase):
  async def test_pause_resolution_does_not_consume_native_candidates(self):

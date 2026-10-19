@@ -25,8 +25,18 @@ class ShareWorkspace:
             if not isinstance(password,str) or password and not re.fullmatch('[A-Za-z0-9]{4,8}',password):raise CloudOperationError('提取码应为 4–8 位字母或数字。')
             link['password']=password
             if not self.bridge.features:raise CloudOperationError('工作空间正在准备。')
+            saved_id=None
+            if self.bridge.workspace.settings.get('link_auto_save',True):
+                from app.session_vault import SessionStoreError
+                try:
+                    saved_id=self.bridge.inbox.save(link,opening=True,status='正在打开')['id']
+                except SessionStoreError:
+                    raise CloudOperationError('链接未能加密保存，请检查当前 Windows 用户权限。') from None
             p=self.bridge.panels[link['provider']];ops=self.bridge.features.ops[link['provider']]
-            account=await ops.account();stamp=ops.stamp();ops.guard(stamp)
+            try:account=await ops.account();stamp=ops.stamp();ops.guard(stamp)
+            except Exception:
+                if saved_id:self.bridge.inbox.mark(saved_id,'打开未完成')
+                raise
             self.bridge.features.accounts[link['provider']]=account
             for key,row in list(self.sessions.items()):
                 active=any(getattr(job,'_share_key','')==key and job.state not in ('completed','cancelled') for job in row['panel'].jobs)
@@ -51,13 +61,18 @@ class ShareWorkspace:
                 ops.guard(stamp)
                 token=secrets.token_hex(24)
                 self.sessions[token]={'provider':link['provider'],'ops':ops,'stamp':stamp,'panel':p,'share':share,
-                    'list':listing,'source':resolver,'client':owned,'at':time.monotonic(),'used':False,'path':'/','page':0,'rows':rows,'revision':0,'link':link,'inbox_id':d.get('inbox_id')}
-                if d.get('inbox_id'):
-                    saved=next((x for x in self.bridge.inbox.rows() if x['id']==d['inbox_id'] and x.get('url')==link['url'].split('?')[0]),None)
+                    'list':listing,'source':resolver,'client':owned,'at':time.monotonic(),'used':False,'path':'/','page':0,'rows':rows,'revision':0,'link':link,'inbox_id':saved_id}
+                if saved_id:
+                    saved=self.bridge.inbox.get(saved_id)
                     if not saved:self.sessions[token]['inbox_id']=None
+                    else:
+                        self.bridge.inbox.mark(saved_id,'可访问')
+                        if len(rows)==1:
+                            self.bridge.inbox.suggest_title(saved_id, rows[0].name)
                 return self.snapshot(token)
             except BaseException:
                 if owned:await owned.aclose()
+                if saved_id:self.bridge.inbox.mark(saved_id,'打开未完成')
                 raise
         row=self.session(d.get('session'))
         if action!='links_list':raise CloudOperationError('分享操作无效。')

@@ -14,6 +14,7 @@ from desktop.sync_review import SyncReview
 from desktop.cross_copy import CrossCopy
 from desktop.link_inbox import LinkInbox
 from desktop.share_actions import ShareActions
+from app.share_links import parse_links
 from test_sync_060 import Ops as OriginalOps,Download
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -147,6 +148,14 @@ class InboxTests(unittest.IsolatedAsyncioTestCase):
  async def test_encrypted_dedup_and_password_edit(self):
   url='https://pan.quark.cn/s/11bbafa97c9b?pwd=W2pz';a=await self.inbox.action({'action':'inbox_add','text':url});await self.inbox.action({'action':'inbox_edit','text':url,'password':'abcd','title':'资料'})
   raw=json.dumps(self.store.all('link_inbox'));self.assertNotIn('11bbafa97c9b',raw);self.assertNotIn('abcd',raw);rows=self.inbox.rows();self.assertEqual(len(rows),1);self.assertEqual(rows[0]['password'],'abcd');self.assertEqual(rows[0]['id'],a['id'])
+ async def test_share_title_never_overwrites_user_title(self):
+  link={'url':'https://pan.quark.cn/s/11bbafa97c9b','provider':'quark','password':''}
+  row=self.inbox.save(link)
+  self.inbox.suggest_title(row['id'],'网盘文件.txt')
+  self.assertEqual(self.inbox.get(row['id'])['title'],'网盘文件.txt')
+  await self.inbox.action({'action':'inbox_edit','id':row['id'],'text':link['url'],'title':'我的备注名'})
+  self.inbox.suggest_title(row['id'],'服务后来返回的名称.txt')
+  self.assertEqual(self.inbox.get(row['id'])['title'],'我的备注名')
  async def test_multiple_links_rejected(self):
   with self.assertRaises(CloudOperationError):await self.inbox.action({'action':'inbox_add','text':'https://pan.quark.cn/s/11bbafa97c9b https://pan.quark.cn/s/22bbafa97c9b'})
  async def test_no_implicit_clipboard_storage(self):self.assertEqual(self.inbox.rows(),[])
@@ -157,6 +166,45 @@ class InboxTests(unittest.IsolatedAsyncioTestCase):
   self.assertEqual((row['path'],row['page']),('/folder',2))
  async def test_clear_only_inbox(self):
   self.store.put('sync_rule','r',{'id':'r'});await self.inbox.action({'action':'inbox_clear'});self.assertIsNotNone(self.store.get('sync_rule','r'))
+ async def test_unlimited_paging_search_and_batch_undo(self):
+  for i in range(125):
+   self.inbox.save({'url':f'https://pan.quark.cn/s/{i:012d}','provider':'quark','password':''},title=f'项目 {i}')
+  first=self.inbox.list_page(0);last=self.inbox.list_page(2)
+  self.assertEqual((first['total'],len(first['rows']),len(last['rows'])),(125,50,25))
+  found=self.inbox.list_page(0,'项目 124');self.assertEqual(found['total'],1)
+  ids=[first['rows'][0]['id'],first['rows'][1]['id']]
+  await self.inbox.action({'action':'inbox_remove_batch','ids':ids})
+  self.assertEqual(self.inbox.list_page(0)['total'],123)
+  await self.inbox.action({'action':'inbox_undo'})
+  self.assertEqual(self.inbox.list_page(0)['total'],125)
+ async def test_address_edit_conflict_requires_explicit_merge(self):
+  a=await self.inbox.action({'action':'inbox_add','text':'https://pan.quark.cn/s/111111111111'})
+  b=await self.inbox.action({'action':'inbox_add','text':'https://pan.quark.cn/s/222222222222'})
+  with self.assertRaises(CloudOperationError):
+   await self.inbox.action({'action':'inbox_edit','id':a['id'],'text':b['url'],'title':'合并后名称'})
+  self.assertEqual(self.inbox.list_page(0)['total'],2)
+  merged=await self.inbox.action({'action':'inbox_edit','id':a['id'],'text':b['url'],'title':'合并后名称','merge':True})
+  self.assertEqual((merged['id'],merged['title'],self.inbox.list_page(0)['total']),(b['id'],'合并后名称',1))
+ async def test_many_pasted_links_are_not_silently_truncated(self):
+  pasted=' '.join(f'https://pan.quark.cn/s/{i:012d}' for i in range(45))
+  self.assertEqual(len(parse_links(pasted)),45)
+ async def test_attempt_without_connection_is_recorded(self):
+  row=await self.inbox.action({'action':'inbox_record','text':'https://pan.quark.cn/s/333333333333'})
+  self.assertEqual((row['status'],row['opened']),('打开未完成',1))
+ async def test_private_search_index_migrates_legacy_record(self):
+  link={'url':'https://pan.quark.cn/s/444444444444','provider':'quark','password':'Ab12'}
+  row=self.inbox.save(link,title='机密项目')
+  record=self.store.get('link_inbox',row['id']);record.pop('provider')
+  self.store.put('link_inbox',row['id'],record)
+  with self.store.db:
+   self.store.db.execute('DELETE FROM link_search_terms WHERE id=?',(row['id'],))
+   self.store.db.execute('DELETE FROM link_search_docs WHERE id=?',(row['id'],))
+  found=self.inbox.list_page(0,'机密')
+  self.assertEqual((found['total'],found['rows'][0]['id']),(1,row['id']))
+  self.assertEqual(self.inbox.list_page(0,provider='quark')['total'],1)
+  raw=json.dumps(self.store.all('link_inbox'))
+  self.assertNotIn('机密',raw)
+  self.assertNotIn('Ab12',raw)
 
 class SharingTests(unittest.IsolatedAsyncioTestCase):
  async def asyncSetUp(self):
@@ -168,6 +216,23 @@ class SharingTests(unittest.IsolatedAsyncioTestCase):
   r=await self.prepare();self.s.baidu.assert_not_awaited();out=await self.s.action({'action':'sharing_commit','token':r['token']});self.assertEqual(out['password'],'a1b2')
   with self.assertRaises(CloudOperationError):await self.s.action({'action':'sharing_commit','token':r['token']})
   self.s.baidu.assert_awaited_once();self.assertEqual(self.s.baidu.call_args.args[2]['schannel'],'4')
+ async def test_created_share_has_encrypted_account_scoped_management_record(self):
+  with tempfile.TemporaryDirectory(dir=ROOT/'work/test-runs') as folder:
+   store=DurableStore(Path(folder)/'db')
+   try:
+    self.b.features.store=store;self.b.features.accounts={'baidu':self.ops.uid}
+    plan=await self.prepare();out=await self.s.action({'action':'sharing_commit','token':plan['token']})
+    self.assertEqual((await self.s.action({'action':'sharing_list'}))['total'],1)
+    self.assertNotIn('pan.baidu.com',json.dumps(store.all('my_share')))
+    await self.s.action({'action':'sharing_edit_record','id':out['record_id'],'title':'作品交付','note':'客户甲'})
+    self.assertEqual((await self.s.action({'action':'sharing_list'}))['rows'][0]['note'],'客户甲')
+    self.b.features.accounts['baidu']='other-account'
+    offline=(await self.s.action({'action':'sharing_list'}))['rows'][0]
+    self.assertFalse(offline['account_current'])
+    self.assertEqual(offline['title'],'作品交付')
+    await self.s.action({'action':'sharing_remove_record','id':out['record_id']})
+    self.assertEqual((await self.s.action({'action':'sharing_list'}))['total'],0)
+   finally:store.close()
  async def test_mutation_of_selected_file_blocks_share(self):
   r=await self.prepare();self.ops.put('/a.txt',b'other')
   with self.assertRaises(CloudOperationError):await self.s.action({'action':'sharing_commit','token':r['token']})

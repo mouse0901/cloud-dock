@@ -88,7 +88,7 @@
  function attach(e){if(!same(e)){editing=null;e.node.remove();return;}const row=$$('.file-row').find(r=>r.dataset.id===e.item.id);if(!row){editing=null;return;}row.classList.add('renaming');const name=row.querySelector('.file-name>span:last-child');if(name){name.hidden=true;name.after(e.node);}}
  window.cloudDockInlineRename=function(item){
   if(editing?.saving){toast('正在保存名称，请稍候');return;}if(editing)finish(editing);const p=providerState();if(!p?.connected||p.busy||p.share||p.path!==state.path)return;
-  const e={item,provider:state.provider,path:state.path,context:p.context,session:p.session,saving:false,node:document.createElement('span')};editing=e;e.node.className='inline-rename';e.node.innerHTML='<input aria-label="新的文件名" maxlength="200" autocomplete="off" spellcheck="false"><small role="status" aria-live="polite"></small>';
+  const e={item,provider:state.provider,path:state.path,context:p.context,session:p.session,saving:false,node:document.createElement('span')};editing=e;e.node.className='inline-rename';e.node.innerHTML='<input aria-label="新的文件名" maxlength="200" autocomplete="off" spellcheck="false"><small role="status" aria-live="polite">输入名称后保存，Esc 取消</small><span class="inline-rename-actions"><button type="button" class="quiet" data-inline-save>保存</button><button type="button" class="quiet" data-inline-cancel>取消</button></span>';
   const input=e.node.querySelector('input'),message=e.node.querySelector('small');input.value=item.name;
   for(const type of ['click','dblclick','contextmenu'])e.node.addEventListener(type,x=>x.stopPropagation());
   input.onkeydown=async event=>{event.stopPropagation();if(event.key==='Escape'){event.preventDefault();if(!e.saving)finish(e);return;}if(event.key!=='Enter'||e.saving)return;event.preventDefault();
@@ -100,6 +100,8 @@
     finish(e);toast('操作仍在处理中，请稍后刷新目录核对。');
    }catch(err){if(editing===e&&same(e)){input.setAttribute('aria-invalid','true');if(e.committed){message.textContent='保存结果待核对，请刷新目录确认。';const check=document.createElement('button');check.className='quiet';check.textContent='核对目录';check.onclick=()=>{finish(e);$('#refresh').click();};message.append(check);}else{e.saving=false;input.disabled=false;message.textContent=err.message;input.focus();}}else toast(err.message);}
   };
+  e.node.querySelector('[data-inline-save]').onclick=()=>input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
+  e.node.querySelector('[data-inline-cancel]').onclick=()=>{if(!e.saving)finish(e);};
   attach(e);input.focus();const dot=item.type==='folder'?-1:item.name.lastIndexOf('.');input.setSelectionRange(0,dot>0?dot:item.name.length);
  };
  $('#fileList').addEventListener('click',e=>{if(e.target.closest('.file-row'))return;if(editing&&!editing.saving)finish(editing);state.selected.clear();state.anchor=null;syncSelection();});

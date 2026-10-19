@@ -325,6 +325,7 @@ class UpdateService:
         self.directory = workspace.data_dir / "updates"
         self.state_path = self.directory / "state.json"
         self.task = None
+        self.generation = 0
         self.cancel = threading.Event()
         self.closed = False
         self.state = {"status": "disabled" if not self.client.config.get("enabled") else "idle", "current": VERSION,
@@ -380,27 +381,47 @@ class UpdateService:
             await self.check(False)
 
     async def preferences(self, data):
+        changes = {}
         for key in ("auto_check", "auto_download"):
             if key in data:
                 if type(data[key]) is not bool:
                     raise UpdateError("更新设置无效。")
-                self.workspace.settings["update_" + key] = data[key]
+                changes["update_" + key] = data[key]
+        channel_changed = False
         if "channel" in data:
             if data["channel"] not in ("stable", "beta"):
                 raise UpdateError("更新通道无效。")
-            self.workspace.settings["update_channel"] = data["channel"]
-            self.workspace.settings["update_skipped"] = ""
-            self.state.update(channel=data["channel"], status="idle", available="", notes="", error="")
-            self.manifest = None
+            if self.state["status"] == "downloading":
+                raise UpdateError("请先暂停更新下载，再切换通道。")
+            channel_changed = data["channel"] != self.workspace.settings.get("update_channel", "stable")
+            if channel_changed:
+                changes.update(update_channel=data["channel"], update_skipped="", update_last_checked=0)
+        proxy_changed = "proxy_mode" in data or "proxy_url" in data
+        original = dict(self.workspace.settings)
         if "proxy_mode" in data or "proxy_url" in data:
             mode = data.get("proxy_mode", self.workspace.settings.get("update_proxy_mode", "auto"))
             url = data.get("proxy_url", self.workspace.settings.get("update_proxy_url", ""))
             self.client.configure_proxy(mode, url)
-            self.workspace.settings["update_proxy_mode"] = mode
-            self.workspace.settings["update_proxy_url"] = self.client.proxy_url
+            changes.update(update_proxy_mode=mode, update_proxy_url=self.client.proxy_url)
+        self.workspace.settings.update(changes)
+        try:
+            await self.workspace.save()
+        except Exception:
+            self.workspace.settings.clear()
+            self.workspace.settings.update(original)
+            if proxy_changed:
+                self.client.configure_proxy(original.get("update_proxy_mode", "auto"), original.get("update_proxy_url", ""))
+            raise
+        if channel_changed:
+            self.generation += 1
+            # A running check may finish, but its result is no longer current.
+            if self.state["status"] == "checking":
+                self.task = None
+            self.state.update(channel=data["channel"], status="idle", available="", notes="", error="", install_when_idle=False)
+            self.manifest = None
+        if proxy_changed:
             self.state.update(status="idle", available="", notes="", error="")
             self.manifest = None
-        await self.workspace.save()
 
     async def check(self, manual=True):
         if not self.client.config.get("enabled"):
@@ -411,11 +432,16 @@ class UpdateService:
         self.task = asyncio.create_task(self._check(manual))
 
     async def _check(self, manual):
+        generation = self.generation
+        channel = self.workspace.settings.get("update_channel", "stable")
         try:
-            channel = self.workspace.settings.get("update_channel", "stable")
             manifest = await asyncio.to_thread(self.client.check, channel)
+            if generation != self.generation or channel != self.workspace.settings.get("update_channel"):
+                return
             now = int(time.time()); self.workspace.settings["update_last_checked"] = now
             await self.workspace.save()
+            if generation != self.generation or channel != self.workspace.settings.get("update_channel"):
+                return
             skipped = self.workspace.settings.get("update_skipped", "")
             if manifest and is_newer(manifest["version"]) and manifest["version"] != skipped:
                 self.manifest = manifest
@@ -427,9 +453,9 @@ class UpdateService:
                 self.manifest = None
                 self.state.update(status="latest", available="", notes="", total=0, downloaded=0, progress=0, error="")
         except UpdateError as error:
-            self.state.update(status="error", error=str(error))
+            if generation == self.generation:self.state.update(status="error", error=str(error))
         except Exception:
-            self.state.update(status="error", error="检查更新时发生异常，请稍后重试。")
+            if generation == self.generation:self.state.update(status="error", error="检查更新时发生异常，请稍后重试。")
 
     async def download(self):
         if not self.manifest:

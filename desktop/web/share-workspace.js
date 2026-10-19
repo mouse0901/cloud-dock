@@ -1,7 +1,7 @@
 // Account-bound share previews and explicit download confirmation.
 (()=>{
  const dialog=$('#sheet');let epoch=0;
- dialog.addEventListener('close',()=>{epoch++;dialog.classList.remove('links-sheet','download-sheet');});
+ dialog.addEventListener('close',()=>{const input=$('#shareInput');if(input)window.cloudDockLinkDraft={text:input.value,password:$('#sharePassword')?.value||''};epoch++;dialog.classList.remove('links-sheet','download-sheet');});
  function panel(title,html,kind='links'){
   epoch++;sheetKind=kind;dialog.classList.remove('tools-sheet','media-sheet','links-sheet','download-sheet');
   dialog.classList.add(kind+'-sheet');sheet(title,html);return epoch;
@@ -10,31 +10,34 @@
  function error(e){const box=$('#linkError');if(box){box.hidden=false;box.textContent=e.message||'操作未完成，请重试。';}}
  const errorHtml='<p id="linkError" class="sync-error" role="alert" hidden></p>';
  window.openShareWorkspace=function(text='',password='',offered=[],resume=null){
+  if(!text&&window.cloudDockLinkDraft?.text){text=window.cloudDockLinkDraft.text;password=window.cloudDockLinkDraft.password;}
   const id=panel('打开网盘链接','<p>粘贴百度或夸克的分享文字，自动识别链接和提取码。</p><label class="link-label" for="shareInput">分享链接</label><textarea id="shareInput" rows="3" maxlength="16384" placeholder="分享链接或完整的分享文字"></textarea><div id="linkCandidates"></div><label class="link-label" for="sharePassword">提取码（如有）</label><input id="sharePassword" type="text" maxlength="8" autocomplete="off" placeholder="自动识别，也可以手动输入">'+errorHtml+'<div class="link-actions"><button id="shareCollect" class="quiet">收进链接收件箱</button><button id="shareOpen" class="primary">查看文件</button></div>');
-  $('#shareInput').value=text;$('#sharePassword').value=password;let timer,parseId=0,candidates=offered,busy=false;
+  $('#shareInput').value=text;$('#sharePassword').value=password;let timer,parseId=0,candidates=offered,busy=false,chosen=-1;
   function options(){
    const container=$('#linkCandidates');container.replaceChildren();
    if(candidates.length<2)return;
    const label=document.createElement('small');label.textContent='识别到 '+candidates.length+' 个链接，选择一个打开';container.append(label);
-   candidates.forEach((link,i)=>{const b=document.createElement('button');b.className='link-candidate quiet';b.textContent=names[link.provider]+' · '+link.url.split('?')[0];b.onclick=()=>{if(busy)return;$('#shareInput').value=link.url;$('#sharePassword').value=link.password;container.querySelectorAll('button').forEach(x=>x.classList.toggle('chosen',x===b));};container.append(b);});
+   candidates.forEach((link,i)=>{const b=document.createElement('button');b.className='link-candidate quiet';b.textContent=names[link.provider]+' · '+link.url.split('?')[0];b.classList.toggle('chosen',i===chosen);b.onclick=()=>{if(busy)return;chosen=i;$('#sharePassword').value=link.password;container.querySelectorAll('button').forEach((x,n)=>x.classList.toggle('chosen',n===i));};container.append(b);});
   }
   options();
-  $('#shareCollect').onclick=async()=>{try{await api('inbox_add',{text:$('#shareInput').value,password:$('#sharePassword').value.trim()});toast('已加密保存到链接收件箱');}catch(e){error(e);}};
-  $('#shareInput').oninput=()=>{clearTimeout(timer);const serial=++parseId;timer=setTimeout(async()=>{try{const r=await api('links_parse',{text:$('#shareInput').value});if(!alive(id)||serial!==parseId)return;candidates=r.links;options();$('#sharePassword').value=candidates[0]?.password||'';}catch(e){if(alive(id))error(e);}},180);};
+  $('#shareCollect').textContent='保存到链接库';
+  $('#shareCollect').onclick=async()=>{const b=$('#shareCollect');b.disabled=true;try{const found=await api('links_parse',{text:$('#shareInput').value});if(!found.links.length)throw Error('没有识别到有效分享链接');let count=0;for(const link of found.links){await api('inbox_add',{text:link.url,password:found.links.length===1?$('#sharePassword').value.trim()||link.password:link.password});count++;}toast('已加密保存 '+count+' 条链接');if(state.view==='links'){dialog.close();render();}}catch(e){error(e);}finally{if(b.isConnected)b.disabled=false;}};
+  $('#shareInput').oninput=()=>{chosen=-1;clearTimeout(timer);const serial=++parseId;timer=setTimeout(async()=>{try{const r=await api('links_parse',{text:$('#shareInput').value});if(!alive(id)||serial!==parseId)return;candidates=r.links;options();$('#sharePassword').value=candidates[0]?.password||'';}catch(e){if(alive(id))error(e);}},180);};
   $('#shareOpen').onclick=async()=>{
    if(busy)return;busy=true;$('#shareOpen').disabled=true;$('#linkError').hidden=true;
    const input=$('#shareInput').value,code=$('#sharePassword').value.trim();
    try{
     const r=await api('links_parse',{text:input});if(!alive(id))return;
     if(!r.links.length)throw Error('没有识别到百度或夸克分享链接，请检查地址。');
-    if(r.links.length>1){candidates=r.links;options();throw Error('请选择上面的一个链接后再打开。');}
-    const link=r.links[0];
+    if(r.links.length>1&&chosen<0){candidates=r.links;options();throw Error('请选择上面的一个链接后再打开。');}
+    const link=r.links[chosen>=0?chosen:0];
     if(!live?.providers[link.provider]?.connected){
+     if(live?.link_auto_save!==false){try{await api('inbox_record',{text:link.url,password:code||link.password});}catch(e){error(e);return;}}
      error(Error('请先连接'+names[link.provider]+'，连接后可继续打开此分享。'));
      let login=$('#shareLogin');if(!login){login=document.createElement('button');login.id='shareLogin';login.className='quiet';login.textContent='连接'+names[link.provider];$('#linkError').after(login);}
      login.onclick=()=>{epoch++;dialog.classList.remove('links-sheet');dialog.addEventListener('close',()=>setTimeout(()=>window.openShareWorkspace(input,code||link.password,candidates),0),{once:true});loginSheet(link.provider,true);};return;
     }
-    let result=await api('links_open',{link:link.url,password:code||link.password,inbox_id:resume?.inboxId});
+    let result=await api('links_open',{link:link.url,password:code||link.password});
     if(resume?.path==='/'&&resume.page>0){result=await api('links_list',{session:result.session,path:'/',page:resume.page});if(!alive(id))return;}
     if(resume?.path&&resume.path!=='/'){
      try{let path='';for(const part of resume.path.split('/').filter(Boolean)){path+='/'+part;result=await api('links_list',{session:result.session,path,page:path===resume.path?(resume.page||0):0});if(!alive(id))return;}}catch(e){toast('上次位置暂不可用，已返回可读取的分享目录');}
