@@ -113,15 +113,28 @@ class Bridge:
         for provider,p in self.panels.items():
             for j in [*p.jobs,*p.upload_jobs]:
                 if not hasattr(j,'_desktop_id'):j._desktop_id=secrets.token_hex(12)
-                rows.append({'id':j._desktop_id,'provider':provider,'name':j.item.name,'path':j.item.path,
+                if not hasattr(j,'_desktop_created_at'):
+                    previous=self.features.store.get('transfer',j._desktop_id) if self.features else None
+                    j._desktop_created_at=(previous or {}).get('created_at',0) if previous else time.time()
+                rows.append({'id':j._desktop_id,'created_at':j._desktop_created_at,'provider':provider,'name':j.item.name,'path':j.item.path,
                     'account_name':self.profiles.label(provider,self.features.accounts.get(provider,'')) if self.features else '', 'account_current':True,
                     'direction':getattr(j,'direction','download'),'status':j.state,'done':j.done,'total':j.total,
                     'speed':j.speed,'error':j.error,'warning':getattr(j,'warning',''),
                     'restart':j.requires_restart,'committed':getattr(j,'commit_started',False),
                     'target':str(getattr(j,'target','') or ''),'connections':getattr(j,'active_connections',0),
                     'group':getattr(j,'_download_group',''),'group_id':getattr(j,'_group_id',''),'priority':getattr(j,'_priority',1),
+                    'temporary_share':getattr(j,'_temporary_share',''),
                     'error_code':getattr(j,'error_code','') or next((code for entry,code in getattr(p,'_live_errors',{}).items() if entry is j),'')})
-        return rows+(self.features.archived() if self.features else [])
+        result=sorted(rows+(self.features.archived() if self.features else []),
+                      key=lambda row:row.get('created_at',0),reverse=True)
+        if self.features:
+            for row in result:
+                key=row.get('temporary_share')
+                if key:
+                    temporary=self.features.store.get('share_temp',key) or {}
+                    row['temporary_state']=temporary.get('state','needs_review')
+                    row['temporary_path']=temporary.get('folder_path','')
+        return result
     async def snapshot(self):
         snapshot_started=time.monotonic();self.health.snapshots+=1
         providers={}
@@ -153,8 +166,8 @@ class Bridge:
                 'download_directory_confirmed':self.workspace.settings.get('download_directory_confirmed',False),
                 'favorites':self.experience.favorites() if self.features else [],
                 'file_view':{k:self.workspace.settings.get(k,v) for k,v in {'view':'list','sort_field':'name','sort_desc':False,'density':'comfortable','grid_size':'medium','full_names':False,**LAYOUT_DEFAULTS}.items()},
-                'update':self.updates.snapshot() if self.updates else {'status':'initializing','current':'1.0.0','enabled':False},
-                'version':self.updates.state['current'] if self.updates else '1.0.1-beta.1','migration_notice':(self.workspace.data_dir/'migration.json').exists(),'theme':self.workspace.settings.get('theme','light'),'reduced':self.workspace.settings.get('reduce_motion',False)}
+                'update':self.updates.snapshot() if self.updates else {'status':'initializing','current':json.loads((ROOT/'version.json').read_text(encoding='utf-8'))['version'],'enabled':False},
+                'version':self.updates.state['current'] if self.updates else json.loads((ROOT/'version.json').read_text(encoding='utf-8'))['version'],'migration_notice':(self.workspace.data_dir/'migration.json').exists(),'theme':self.workspace.settings.get('theme','light'),'reduced':self.workspace.settings.get('reduce_motion',False)}
         self.health.last_snapshot_ms=round((time.monotonic()-snapshot_started)*1000,2)
         return result
     def selected_paths(self,key,kind):
@@ -285,6 +298,10 @@ class Bridge:
         if action=='logout':await p.cancel(None);return {}
         if action=='remember':p.remember_login.value=bool(d.get('value'));await p.remember_changed(None);return {}
         if action=='task':
+            if d.get('command')=='cleanup_temp' and self.features:
+                from app.cloud_operations import CloudOperationError
+                try:return await self.features.action(d)
+                except CloudOperationError as e:raise UiError(str(e)) from None
             job=next((j for j in [*p.jobs,*p.upload_jobs] if getattr(j,'_desktop_id',None)==d.get('id')),None)
             if job is None and self.features:
                 from app.cloud_operations import CloudOperationError

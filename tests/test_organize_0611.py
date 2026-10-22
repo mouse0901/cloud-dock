@@ -260,9 +260,12 @@ class SharingTests(unittest.IsolatedAsyncioTestCase):
   self.ops.put('/target',directory=True)
   prepared=await self.s.action({'action':'sharing_prepare','kind':'save','session':'s','context':'1','ids':[shared.id],'target':'/target'})
   self.assertNotIn(prepared['target'],self.ops.rows)
+  self.assertEqual(prepared['bytes'],shared.size)
   session['path']='/';session['page']=3
   async def transfer(ops,route,data,extra,client):
    self.assertEqual(route,'transfer');self.assertEqual(extra,{'shareid':'share-id','from':'owner'});self.ops.put(data['path']+'/a.txt',b'one');return {}
   self.s.baidu.side_effect=transfer
   out=await self.s.action({'action':'sharing_commit','token':prepared['token']})
   listing.assert_awaited_once_with('/nested',0);self.assertEqual(out['count'],1);self.assertIn('/a.txt',self.ops.rows);self.assertEqual(out['path'],prepared['target'])
+  self.assertEqual([(x['name'],x['size'],x['path']) for x in out['files']],
+                   [('a.txt',shared.size,prepared['target']+'/a.txt')])

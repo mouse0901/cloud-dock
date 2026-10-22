@@ -11,6 +11,22 @@ button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outli
 @media(max-width:1000px){.task-foot{flex-wrap:wrap;gap:4px}.task-top{flex-wrap:wrap}.task-name{flex:1;min-width:130px}.task-actions{margin-left:auto}.group-toggle{flex:1}.group-stats{font-size:11px!important}.transfer-title{font-size:22px!important}}
 @media(prefers-reduced-motion:reduce){.task-more-menu button:active,.settings-hit:active,.provider-account:active{transform:none}}body.reduced .task-more-menu button:active,body.reduced .settings-hit:active,body.reduced .provider-account:active{transform:none}
 
+/* A completed state is a label; opening a location is a separate action. */
+.task-status-completed{display:inline-flex;align-items:center;gap:4px;padding:4px 8px;border-radius:999px;background:#eaf6ef;color:#16754d;font-weight:600;line-height:16px}
+.task-status-completed svg{width:13px;height:13px;stroke-width:2.1}
+body.dark .task-status-completed{background:#243d32;color:#83dfaa}
+.task-state-line{display:flex;align-items:center;gap:7px;min-height:24px}.task-state-line .task-status{display:inline-flex;align-items:center;gap:4px;width:max-content;padding:3px 8px;border-radius:999px;line-height:16px}.task-state-line .task-status-active{background:var(--selected);color:var(--accent)}.task-state-line .task-status-attention{background:color-mix(in srgb,#c88b27 12%,var(--bar));color:#b97716}.task-status-completed+.task-actions{margin-left:4px;padding-left:12px;border-left:1px solid var(--line)}
+.task-actions .task-location-action{display:inline-flex;align-items:center;gap:6px;padding:5px 9px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--accent);font-weight:600;line-height:16px}
+.task-actions .task-location-action svg{width:14px;height:14px}
+.task-actions .task-location-action:hover{border-color:var(--accent);background:var(--selected)}
+.task-compact .task-top{display:grid;grid-template-columns:20px minmax(0,1fr) auto;column-gap:10px;row-gap:4px;align-items:start}
+.task-compact .task-top>.icon{grid-column:1;grid-row:1 / span 2}
+.task-compact .task-name{grid-column:2;grid-row:1}
+.task-compact .task-status{grid-column:2;grid-row:2;justify-self:start}
+.task-compact .task-status+.task-actions{grid-column:3;grid-row:1 / span 2;align-self:center;margin-left:0;padding-left:0;border-left:0}
+.task-compact .task-location-action{min-height:31px}
+.task-unified .task-top{display:grid;grid-template-columns:20px minmax(0,1fr) auto;column-gap:10px;row-gap:4px;align-items:start}.task-unified .task-top>.icon{grid-column:1;grid-row:1 / span 2}.task-unified .task-name{grid-column:2;grid-row:1}.task-unified .task-state-line{grid-column:2;grid-row:2;justify-self:start}.task-unified .task-actions{grid-column:3;grid-row:1 / span 2;align-self:center;margin-left:0;padding-left:0;border-left:0}.task-unified .task-location-action{min-height:31px}.task-primary-action{display:inline-flex;align-items:center;gap:6px;min-height:31px;padding:5px 12px!important;border:1px solid var(--accent)!important;border-radius:7px!important;background:var(--selected)!important;color:var(--accent)!important;font-weight:600}.task-primary-action:hover{background:color-mix(in srgb,var(--accent) 16%,var(--bg))!important}.task-inline-info{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;color:#b97716}.task-inline-info:hover{background:color-mix(in srgb,#c88b27 12%,var(--bar))}.task-inline-info .share-temp-mark{width:15px;height:15px;font-size:10px}
+
 .settings-hit{white-space:normal;min-width:0;overflow-wrap:anywhere}.settings-hit strong,.settings-hit small{max-width:100%;min-width:0}.task .task-account{display:inline;font-size:10px!important}.task .task-account:before{content:" · "}
 .transfer-group{overflow:visible}.transfer-group-head{border-radius:9px 9px 0 0}.group-stats{border-radius:0 0 9px 9px}.group-body{padding:0}
 @media(max-width:800px){

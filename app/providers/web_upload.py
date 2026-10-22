@@ -13,7 +13,7 @@ from app.upload import UploadError, BLOCK_SIZE
 from app.providers.baidu_web import UA as BAIDU_UA
 from app.providers.quark_web import DRIVE, PARAMS, UA as QUARK_UA, QuarkApiError
 
-async def response_bytes(client, method, url, *, headers=None, **kwargs):
+async def response_bytes(client, method, url, *, headers=None, diagnostic=None, stage=None, part_number=None, **kwargs):
     try:
         async with client.stream(method,url,headers=headers,follow_redirects=False,
                                  timeout=httpx.Timeout(120,connect=15),**kwargs) as response:
@@ -23,6 +23,15 @@ async def response_bytes(client, method, url, *, headers=None, **kwargs):
                 if len(raw)>2*1024*1024:raise UploadError('upload_response','上传服务返回数据过大，已停止处理。')
             if response.is_redirect:raise UploadError('upload_address','上传服务要求未验证的跳转，已停止传输。')
             if response.status_code not in (200,201,203,204):
+                if diagnostic is not None:
+                    # OSS XML can contain request identifiers and object paths.
+                    # Extract only its bounded error-code token, never its body.
+                    match=re.search(rb'<Code>([A-Za-z0-9_]{1,64})</Code>',raw)
+                    event={'stage':stage or 'upload_storage','http_status':response.status_code}
+                    if type(part_number) is int and 0<part_number<100000:event['part_number']=part_number
+                    if match:event['oss_code']=match[1].decode('ascii')
+                    try:diagnostic(event)
+                    except Exception:pass
                 raise UploadError('upload_http',f'上传请求未成功（HTTP {response.status_code}），请重试。')
             return bytes(raw),response.headers
     except httpx.HTTPError:
@@ -190,7 +199,10 @@ class QuarkUploader(UploadAdapter):
         if parent is None:raise UploadError('upload_path','请重新打开目标文件夹后上传。')
         mime=mimetypes.guess_type(job.item.name)[0] or 'application/octet-stream'
         stamp=job.fingerprint.modified_ns//1000000
-        info,metadata=await self.call('file/upload/pre',{'ccp_hash_update':True,'parallel_upload':True,
+        # This adapter uploads parts sequentially and does not maintain the
+        # parallel protocol's cumulative SHA1 hash context. Request a matching
+        # server session so part 2 is not rejected with NoHashContext.
+        info,metadata=await self.call('file/upload/pre',{'ccp_hash_update':True,'parallel_upload':False,
             'pdir_fid':parent,'dir_name':'','size':job.total,'file_name':job.item.name,'format_type':mime,
             'l_created_at':stamp,'l_updated_at':stamp})
         if not isinstance(info,dict):raise UploadError('upload_response','夸克返回的上传任务不完整。')
@@ -221,7 +233,8 @@ class QuarkUploader(UploadAdapter):
                 data=await job.read(offset,part_size)
                 query=urlencode({'partNumber':number,'uploadId':upload_id})
                 headers=await signed('PUT',mime,query);headers['Content-Length']=str(len(data))
-                _,response_headers=await response_bytes(client,'PUT',url+'?'+query,content=job.stream(data,offset),headers=headers)
+                _,response_headers=await response_bytes(client,'PUT',url+'?'+query,content=job.stream(data,offset),headers=headers,
+                    diagnostic=self.api.emit,stage='upload_part',part_number=number)
                 etag=response_headers.get('etag','').strip('"')
                 if not re.fullmatch(r'[a-fA-F0-9]{32}',etag):raise UploadError('upload_checksum','夸克没有返回有效的分片校验结果。')
                 if etag.lower()!=hashlib.md5(data).hexdigest():raise UploadError('upload_checksum','夸克上传分片校验未通过。')
@@ -232,7 +245,8 @@ class QuarkUploader(UploadAdapter):
             checksum=base64.b64encode(hashlib.md5(xml).digest()).decode()
             callback64=base64.b64encode(json.dumps(callback,separators=(',',':')).encode()).decode()
             query=urlencode({'uploadId':upload_id});headers=await signed('POST','application/xml',query,{'x-oss-callback':callback64},checksum)
-            await response_bytes(client,'POST',url+'?'+query,content=xml,headers=headers)
+            await response_bytes(client,'POST',url+'?'+query,content=xml,headers=headers,
+                diagnostic=self.api.emit,stage='upload_commit')
             job.guard()
             await self.call('file/upload/finish',{'task_id':task_id,'obj_key':key})
         finally:

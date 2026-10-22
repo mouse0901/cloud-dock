@@ -1,6 +1,7 @@
 // Each tab owns its history, page, selection and scroll; account sessions are never cached.
 (()=>{
- const tabs=[],sessions=new Map();let nextId=0,active=null,epoch=0,chain=Promise.resolve(),pending=false,refreshing=false,loadingPrefs=false;
+ const tabs=[],sessions=new Map(),directoryCache=new Map();let nextId=0,active=null,epoch=0,chain=Promise.resolve(),pending=false,refreshing=false,loadingPrefs=false;
+ const CACHE_LIMIT=240;
  const bar=document.createElement('nav');bar.id='browserTabs';bar.setAttribute('aria-label','网盘标签页');bar.setAttribute('role','tablist');$('.toolbar').after(bar);
  const errorBox=document.createElement('div');errorBox.id='tabError';errorBox.hidden=true;errorBox.setAttribute('role','alert');errorBox.innerHTML='<span></span><button class="quiet">重新读取</button>';$('.content-region').before(errorBox);errorBox.querySelector('button').onclick=()=>load(here());
  const display=document.createElement('button');display.id='viewOptions';display.className='icon-button';display.title='显示选项';display.setAttribute('aria-label','显示选项');display.innerHTML=icon('list');$('#sort').before(display);
@@ -8,26 +9,41 @@
  function make(provider,path='/',page=0){const t={id:++nextId,entries:[point(provider,path,page)],index:0,positions:new Map()};tabs.push(t);return t;}
  function here(t=active){return t?.entries[t.index];}
  function key(h){return JSON.stringify([h.provider,h.path,h.page]);}
+ function cacheKey(h,session=live?.providers[h.provider]?.session){return JSON.stringify([h.provider,String(session??''),h.path,h.page]);}
+ function cached(h,session=live?.providers[h.provider]?.session){return h&&directoryCache.get(cacheKey(h,session));}
+ function rememberDirectory(h,value,session=live?.providers[h.provider]?.session){
+  if(!h||!Array.isArray(value?.files)||session===undefined)return;
+  const k=cacheKey(h,session);directoryCache.delete(k);directoryCache.set(k,{files:[...value.files],context:value.context||'',at:Date.now()});
+  while(directoryCache.size>CACHE_LIMIT)directoryCache.delete(directoryCache.keys().next().value);
+ }
+ function forgetProvider(provider){for(const k of [...directoryCache.keys()])if(JSON.parse(k)[0]===provider)directoryCache.delete(k);}
+ function useDirectory(h,value){if(!value)return;data[h.provider][h.path]=value.files;}
+ function readyDirectory(h,session){const p=live?.providers[h.provider];return !!(p?.connected&&!p.busy&&p.session===session&&p.path===h.path&&(p.page||0)===h.page&&Array.isArray(p.files));}
  function save(){const h=here();if(!h||state.view!=='files'||pending||h.provider!==state.provider||h.path!==state.path)return;Object.assign(h,{selected:[...state.selected],anchor:state.anchor,scroll:$('#fileList').scrollTop,term:$('#search').value,filter:state.filter});active.positions.set(key(h),{...h,selected:[...h.selected]});if(active.positions.size>100)active.positions.delete(active.positions.keys().next().value);}
  function drawTabs(){bar.hidden=state.view!=='files';const sig=JSON.stringify([active?.id,tabs.map(t=>[t.id,here(t)])]);if(bar.dataset.key===sig)return;bar.dataset.key=sig;
   bar.innerHTML=tabs.map(t=>{const h=here(t),title=h.path==='/'?names[h.provider]:h.path.split('/').pop();return `<div class="browser-tab ${t===active?'selected':''}"><button role="tab" aria-selected="${t===active}" tabindex="${t===active?0:-1}" data-tab="${t.id}" title="${esc(names[h.provider]+' · '+h.path)}"><small>${h.provider==='baidu'?'百度':'夸克'}</small><span>${esc(title)}</span></button><button class="tab-close" data-close-tab="${t.id}" aria-label="关闭 ${esc(title)}">×</button></div>`;}).join('')+'<button id="newBrowserTab" class="icon-button" title="新建标签页（Ctrl + T）" aria-label="新建标签页">＋</button>';
   $$('[data-tab]').forEach(b=>{b.onclick=()=>activate(tabs.find(t=>t.id===Number(b.dataset.tab)));b.onauxclick=e=>{if(e.button===1){e.preventDefault();close(Number(b.dataset.tab));}};b.onkeydown=e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();activate(tabs[(tabs.indexOf(active)+(e.key==='ArrowRight'?1:tabs.length-1))%tabs.length]).then(()=>$('#browserTabs [aria-selected="true"]')?.focus());}};});$$('[data-close-tab]').forEach(b=>b.onclick=()=>close(Number(b.dataset.closeTab)));$('#newBrowserTab').onclick=()=>newTab(state.provider,'/');
  }
- function navigationControls(){if(!active)return;$('#back').disabled=active.index===0;$('#forward').disabled=active.index===active.entries.length-1;$('#fileList').classList.toggle('tab-loading',pending);$('#fileList').setAttribute('aria-busy',String(pending));errorBox.hidden=state.view!=='files'||!here()?.error;errorBox.querySelector('span').textContent=here()?.error||'';drawTabs();}
+ function navigationControls(){if(!active)return;const quiet=pending&&!!cached(here());$('#back').disabled=active.index===0;$('#forward').disabled=active.index===active.entries.length-1;$('#fileList').classList.toggle('tab-loading',pending&&!quiet);$('#fileList').classList.toggle('tab-syncing',quiet);$('#fileList').setAttribute('aria-busy',String(pending));errorBox.hidden=state.view!=='files'||!here()?.error;errorBox.querySelector('span').textContent=here()?.error||'';bar.classList.toggle('quiet-sync',quiet);bar.title=quiet?'正在后台更新目录，当前内容仍可浏览':'';drawTabs();}
  const originalProvider=providerState;providerState=function(){const p=originalProvider();return p&&state.view==='files'&&(pending||here()?.error||p.path!==state.path||here()?.path===state.path&&p.page!==undefined&&p.page!==here()?.page)?{...p,busy:true}:p;};
- const originalFiles=currentFiles;currentFiles=function(){return (pending&&!refreshing||here()?.error)&&state.view==='files'?[]:originalFiles();};
+ const originalFiles=currentFiles;currentFiles=function(){const h=here(),fallback=!!cached(h);return ((pending&&!refreshing&&!fallback)||(h?.error&&!fallback))&&state.view==='files'?[]:originalFiles();};
  function show(h){state.view='files';state.provider=h.provider;state.path=h.path;state.paths[h.provider]=h.path;state.selected=new Set(pending&&refreshing?h.selected:[]);state.anchor=pending&&refreshing?h.anchor:null;state.filter=h.filter||'all';$('#search').value=h.term||'';$('#filterLabel').textContent=({all:'全部类型',folder:'文件夹',image:'图片',video:'视频',pdf:'PDF',text:'文档',audio:'音频',archive:'压缩包'})[state.filter]||'全部类型';state.history=active.entries;state.cursor=active.index;render();updateLiveControls();}
- async function load(h,locate,keep=false){const current=++epoch,session=live?.providers[h.provider]?.session;refreshing=keep;h.error='';pending=true;show(h);
+ async function load(h,locate,keep=false){const current=++epoch,session=live?.providers[h.provider]?.session,memory=cached(h,session);h.error='';
+  if(!locate&&!keep&&readyDirectory(h,session)){
+   const p=live.providers[h.provider];rememberDirectory(h,p,session);useDirectory(h,p);pending=false;refreshing=false;show(h);
+   const allowed=new Set(currentFiles().map(f=>f.id));state.selected=new Set(h.selected.filter(id=>allowed.has(id)));state.anchor=allowed.has(h.anchor)?h.anchor:null;syncSelection();$('#fileList').scrollTop=h.scroll||0;save();navigationControls();return;
+  }
+  refreshing=keep||!!memory;if(memory)useDirectory(h,memory);pending=true;show(h);
   chain=chain.catch(()=>{}).then(async()=>{
    if(current!==epoch)return;
    const p=live?.providers[h.provider];if(!p?.connected){pending=false;updateLiveControls();return;}
    try{const r=await api(locate?'browse_locate':'browse_view',{provider:h.provider,path:h.path,page:h.page,session,...locate});if(current!==epoch)return;
     if(r.session!==session)throw Error('账号已变化，请重新打开目录');h.page=r.page;if(r.selected){h.selected=[r.selected];h.term='';h.filter='all';}
-    data[h.provider][h.path]=r.files;const actual=live.providers[h.provider];Object.assign(actual,{path:h.path,page:h.page,files:r.files,context:r.context,busy:false});pending=false;
+    data[h.provider][h.path]=r.files;rememberDirectory(h,r,session);const actual=live.providers[h.provider];Object.assign(actual,{path:h.path,page:h.page,files:r.files,context:r.context,busy:false});pending=false;refreshing=false;
     show(h);const allowed=new Set(currentFiles().map(f=>f.id));state.selected=new Set(h.selected.filter(id=>allowed.has(id)));state.anchor=allowed.has(h.anchor)?h.anchor:null;syncSelection();
     $('#fileList').scrollTop=h.scroll||0;if(r.selected){const row=$$('.file-row').find(x=>x.dataset.id===r.selected);row?.scrollIntoView({block:'center'});row?.focus({preventScroll:true});toast('已定位并选中该项目');}
     save();await refreshState();if(current===epoch&&!r.selected)$('#fileList').scrollTop=h.scroll||0;
-   }catch(error){if(current===epoch){pending=false;h.error=error.message;state.selected.clear();render();report(error);updateLiveControls();}}finally{if(current===epoch)navigationControls();}
+   }catch(error){if(current===epoch){pending=false;refreshing=false;h.error=error.message;if(!cached(h,session))state.selected.clear();render();syncSelection();report(error);updateLiveControls();}}finally{if(current===epoch)navigationControls();}
   });await chain;
  }
  async function activate(tab){if(!tab)return;save();active=tab;return load(here());}
@@ -45,7 +61,7 @@
  const previousControls=updateLiveControls;updateLiveControls=function(){previousControls();navigationControls();};
  const previousRefresh=refreshState;refreshState=async function(){await previousRefresh();if(!live)return;
   if(!loadingPrefs&&live.file_view){loadingPrefs=true;applyView(live.file_view);}
-  let reset=false;for(const [provider,p]of Object.entries(live.providers)){if(p.session===undefined)continue;const old=sessions.get(provider);sessions.set(provider,p.session);if(old!==undefined&&old!==p.session){data[provider]={};for(const t of tabs){t.positions.clear();if(t.entries.some(h=>h.provider===provider)){const h=here(t);t.entries=[point(h.provider,h.provider===provider?'/':h.path)];t.index=0;if(t===active)reset=true;}}}}
+  let reset=false;for(const [provider,p]of Object.entries(live.providers)){if(p.session===undefined)continue;const old=sessions.get(provider);sessions.set(provider,p.session);if(old!==undefined&&old!==p.session){data[provider]={};forgetProvider(provider);for(const t of tabs){t.positions.clear();if(t.entries.some(h=>h.provider===provider)){const h=here(t);t.entries=[point(h.provider,h.provider===provider?'/':h.path)];t.index=0;if(t===active)reset=true;}}}if(p.connected&&!p.busy)rememberDirectory(point(provider,p.path||'/',p.page||0),p,p.session);}
   if(reset){++epoch;pending=false;if(state.view==='files'){const h=here();show(h);if(live.providers[h.provider]?.connected)load(h);}}navigationControls();
  };
  function applyView(v){document.body.dataset.density=v.density||'comfortable';document.body.dataset.gridSize=v.grid_size||'medium';document.body.classList.toggle('full-names',!!v.full_names);}

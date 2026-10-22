@@ -12,9 +12,15 @@
  // Keep secondary task actions accessible by keyboard, without a wall of buttons.
  function compactTask(node,t){
   const actions=node.querySelector('.task-actions'),extra=node.querySelector('.task-extra');if(!actions)return;
-  const sig=JSON.stringify([t.status,t.error_code,t.committed,t.restart,t.archived,t.priority]);
+  const label=node.querySelector('.task-status');let stateLine=node.querySelector('.task-state-line');if(label&&!stateLine){stateLine=document.createElement('div');stateLine.className='task-state-line';label.before(stateLine);stateLine.append(label);}
+  const sig=JSON.stringify([t.status,t.error_code,t.committed,t.restart,t.archived,t.priority,t.temporary_share,t.temporary_state]);
   if(node.dataset.compact!==sig||!node.querySelector('.task-more')){
    node.dataset.compact=sig;
+   // transfer-workspace only rebuilds its extra region when task state changes.
+   // Keep the already anchored helper on ordinary polls; replace it only when a
+   // fresh helper exists, otherwise repeated renders would make it disappear.
+   const freshInfo=extra?.querySelector('.task-inline-info');
+   if(freshInfo||!t.temporary_share)stateLine?.querySelectorAll('.task-inline-info').forEach(el=>el.remove());
    const previous=node.querySelector('.task-more');if(previous){for(const b of previous.querySelectorAll('[data-command], [data-copy-target]'))actions.append(b);previous.remove();}
    const more=document.createElement('details');more.className='task-more';more.innerHTML='<summary aria-label="更多任务操作">···</summary><div class="task-more-menu"></div>';const menu=more.lastElementChild;
    const buttons=[...actions.querySelectorAll('button')];
@@ -22,15 +28,15 @@
    let primary=buttons.find(b=>b.dataset.command===preferred||b.dataset.extra===preferred);
    if(!primary&&extra){primary=extra.querySelector('[data-extra="'+preferred+'"]');if(primary)actions.prepend(primary);}
    const disk=extra?.querySelector('.task-disk');if(disk&&t.status==='failed'){if(primary)menu.append(primary);primary=disk;disk.textContent='更换下载位置';actions.prepend(disk);}
-   for(const b of buttons)if(b!==primary)menu.append(b);
-   if(extra){for(const el of [...extra.children])if(!el.classList.contains('eta')){if(primary&&el.dataset.extra===preferred)el.remove();else menu.append(el);}}
+   for(const b of buttons){b.classList.remove('task-primary-action');if(b!==primary)menu.append(b);}if(primary)primary.classList.add('task-primary-action');
+   if(extra){for(const el of [...extra.children])if(!el.classList.contains('eta')){if(el.classList.contains('task-inline-info')){const anchored=stateLine?.querySelector('.task-inline-info');if(anchored&&anchored!==el)el.remove();else stateLine?.append(el);}else if(primary&&el.dataset.extra===preferred)el.remove();else menu.append(el);}}
    if(t.status==='failed'&&/auth|login|session/.test(t.error_code||'')){const b=document.createElement('button');b.className='quiet';b.textContent='重新连接账号';b.onclick=()=>accounts(t.provider);actions.prepend(b);if(primary)menu.prepend(primary);}
-   if(t.status==='completed'&&t.direction==='upload'){const b=document.createElement('button');b.className='quiet';b.textContent='查看网盘位置';b.onclick=async()=>{if(!t.account_current){await accounts(t.provider);return;}await go(t.provider,t.path?.slice(0,t.path.lastIndexOf('/'))||'/');};actions.prepend(b);}
+   if(t.status==='completed'&&t.direction==='upload'){const b=document.createElement('button');b.className='quiet task-location-action';b.innerHTML=icon('cloud')+'查看网盘位置';b.onclick=async()=>{if(!t.account_current){await accounts(t.provider);return;}await go(t.provider,t.path?.slice(0,t.path.lastIndexOf('/'))||'/');};actions.prepend(b);}
    const copy=node.querySelector('.task-path');if(copy)copy.classList.add('compact-path');
    actions.append(more);more.hidden=!menu.children.length;
    more.addEventListener('toggle',()=>{if(more.open)for(const other of $$('.task-more[open],.group-more[open]'))if(other!==more)other.open=false;});
   }
-  const label=node.querySelector('.task-status');const stages={queued:'等待空闲连接',resolving:'获取下载地址',preparing:'检查本地文件',retrying:'正在重连',committing:'正在提交到网盘',verifying:'正在校验文件'};
+  const stages={queued:'等待空闲连接',resolving:'获取下载地址',preparing:'检查本地文件',retrying:'正在重连',committing:'正在提交到网盘',verifying:'正在校验文件'};
   if(label&&stages[t.status])label.textContent=stages[t.status];
   if(label&&t.status==='downloading'&&t.total>0&&t.done>=t.total)label.textContent='正在核对并保存';
   const error=node.querySelector('.task-error');if(error&&!error.closest('details')&&error.textContent){const d=document.createElement('details');d.className='task-error-detail';const summary=document.createElement('summary');summary.textContent=error.textContent.slice(0,60)+(error.textContent.length>60?'…':'')+' · 详情';d.append(summary);error.before(d);d.append(error);}
@@ -59,7 +65,7 @@
  // Search navigates to real controls; hidden result rows never duplicate switches.
  const settingsBefore=settings;settings=function(){
   settingsBefore();
-  const location=$('#downloadLocation')?.closest('.setting-line');if(location){const row=document.createElement('div');row.className='setting-line';row.innerHTML='<span>直接下载到默认位置<small>仅用于自己网盘中的单个文件；重名、文件夹和分享仍会确认</small></span><button id="quickDownloadSetting" class="switch '+(live?.quick_download?'on':'')+'" role="switch" aria-label="直接下载到默认位置" aria-checked="'+!!live?.quick_download+'"></button>';location.after(row);$('#quickDownloadSetting').onclick=async e=>{const b=e.currentTarget;b.disabled=true;try{const r=await api('download_preferences',{quick:b.getAttribute('aria-checked')!=='true'});live.quick_download=r.quick;b.classList.toggle('on',r.quick);b.setAttribute('aria-checked',String(r.quick));}catch(err){toast(err.message);}finally{b.disabled=false;}};}
+  const location=$('#downloadLocation')?.closest('.setting-line');if(location){const row=document.createElement('div');row.className='setting-line';row.innerHTML='<span>直接下载到默认位置<small>单个文件（包括分享）可跳过位置确认；重名和文件夹仍会确认</small></span><button id="quickDownloadSetting" class="switch '+(live?.quick_download?'on':'')+'" role="switch" aria-label="直接下载到默认位置" aria-checked="'+!!live?.quick_download+'"></button>';location.after(row);$('#quickDownloadSetting').onclick=async e=>{const b=e.currentTarget;b.disabled=true;try{const r=await api('download_preferences',{quick:b.getAttribute('aria-checked')!=='true'});live.quick_download=r.quick;b.classList.toggle('on',r.quick);b.setAttribute('aria-checked',String(r.quick));}catch(err){toast(err.message);}finally{b.disabled=false;}};}
   const panels=$('.settings-panels'),nav=$('.settings-nav');if(!panels||!nav)return;
   const search=document.createElement('div');search.className='settings-search';search.innerHTML='<input id="settingsSearch" type="search" placeholder="搜索设置…" aria-label="搜索设置"><button id="clearSettingsSearch" class="quiet" aria-label="清除设置搜索" hidden>×</button>';nav.prepend(search);
   const results=document.createElement('div');results.id='settingsResults';results.hidden=true;panels.prepend(results);

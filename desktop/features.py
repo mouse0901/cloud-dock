@@ -33,6 +33,8 @@ class Features:
         self.thumbs=ThumbnailCache(bridge.workspace.data_dir/'thumbnails')
         from desktop.feedback import Feedback
         self.feedback=Feedback(bridge.workspace,self.store)
+        from desktop.share_temp_download import ShareTempDownload
+        self.share_temp=ShareTempDownload(bridge)
         self.pending={};self.trash_rows={};self.thumb_items={};self.accounts={};self.closing=False
         self.sound_sequence=0;self.completed_pending=False;self.seen_completed=set();self.loop_task=None;self.last_write={};self.last_write_time={}
     async def start(self):
@@ -51,9 +53,12 @@ class Features:
             if getattr(j,'_share_download',False):continue
             if not hasattr(j,'_desktop_id'):j._desktop_id=secrets.token_hex(12)
             if hasattr(j,'_persistent_account') and j._persistent_account!=account:continue
+            if not hasattr(j,'_desktop_created_at'):
+                previous=self.store.get('transfer',j._desktop_id)
+                j._desktop_created_at=(previous or {}).get('created_at',0) if previous else time.time()
             j._persistent_account=account
             key=j._desktop_id;upload=getattr(j,'direction','download')=='upload'
-            row={'id':key,'account':account,'provider':name,'name':j.item.name,'path':j.item.path,'item':{k:v for k,v in asdict(j.item).items() if k!='thumbnail'},
+            row={'id':key,'created_at':j._desktop_created_at,'account':account,'provider':name,'name':j.item.name,'path':j.item.path,'item':{k:v for k,v in asdict(j.item).items() if k!='thumbnail'},
                  'direction':'upload' if upload else 'download','status':j.state,'done':j.done,'total':j.total,'speed':0,'error':j.error,'warning':getattr(j,'warning',''),
                  'restart':j.requires_restart,'committed':getattr(j,'commit_started',False),'target':str(getattr(j,'target','') or ''),'connections':0,'group':getattr(j,'_download_group',''),'group_id':getattr(j,'_group_id',''),'priority':getattr(j,'_priority',1),'error_code':getattr(j,'error_code','') or next((code for entry,code in getattr(p,'_live_errors',{}).items() if entry is j),'')}
             if upload:row.update(local=str(j.local),fingerprint=asdict(j.fingerprint),directory=j.directory,remote_id=j.remote_id)
@@ -61,19 +66,21 @@ class Features:
                 from app.download_checkpoint import checkpoint
                 row['destination']=str(j.destination)
                 row['checkpoint']=checkpoint(j)
+                if getattr(j,'_temporary_share',None):row['temporary_share']=j._temporary_share
             marker=(j.state,j.done//(1024*1024),getattr(j,'commit_started',False),getattr(j,'remote_id',None),getattr(j,'_priority',1),getattr(j,'_group_id',''))
             old_marker=self.last_write.get(key)
             if old_marker!=marker and (old_marker is None or old_marker[0]!=marker[0] or old_marker[2:]!=marker[2:] or time.monotonic()-self.last_write_time.get(key,0)>=2):
                 self.store.put('transfer',key,row);self.last_write[key]=marker;self.last_write_time[key]=time.monotonic()
+            if row.get('temporary_share') and j.state=='completed':self.share_temp.schedule_completed(row)
             if j.state=='completed' and key not in self.seen_completed:
                 self.seen_completed.add(key);self.completed_pending=True
                 if upload:self.account_status.invalidate(name)
     def archived(self):
         active={getattr(j,'_desktop_id',None) for p in self.bridge.panels.values() for j in [*p.jobs,*p.upload_jobs]}
         result=[]
-        for row in self.store.all('transfer'):
+        for row in self.store.recent_transfers():
             if row['id'] in active:continue
-            public={k:v for k,v in row.items() if k in {'id','provider','name','path','direction','status','done','total','speed','error','warning','restart','committed','target','connections','group','group_id','priority','error_code'}}
+            public={k:v for k,v in row.items() if k in {'id','created_at','provider','name','path','direction','status','done','total','speed','error','warning','restart','committed','target','connections','group','group_id','priority','error_code','temporary_share'}}
             public['original_status']=row['status'];public['archived']=True;public['resumable']=bool(row.get('checkpoint'))
             public['account_name']=self.bridge.profiles.label(row['provider'],row.get('account','')) if hasattr(self.bridge,'profiles') else '原账号'
             public['account_current']=self.accounts.get(row['provider'])==row.get('account')
@@ -91,6 +98,13 @@ class Features:
                     except Exception:pass
                 self.capture(name)
                 self.compact(name)
+            for row in self.store.recent_transfers():
+                if row.get('temporary_share') and row.get('status')=='completed':
+                    self.share_temp.schedule_completed(row)
+            review=[r for r in self.store.all('share_temp') if r.get('state') in ('intent','transferring','ready','needs_review')]
+            self.feedback.condition('share_temp_review',bool(review),
+                f'{len(review)} 项临时转存待核对，请检查百度网盘的 CloudDock 临时下载',
+                'error',provider='baidu',view='transfers')
             jobs=[j for p in self.bridge.panels.values() for j in [*p.jobs,*p.upload_jobs]]
             if self.completed_pending and not any(j.state in ('queued','preparing','uploading','downloading','committing','verifying') for j in jobs):
                 self.sound_sequence+=1;self.completed_pending=False
@@ -145,7 +159,7 @@ class Features:
             except (DownloadError,OSError) as error:
                 p.jobs.remove(job)
                 raise CloudOperationError(str(error)) from None
-            job._desktop_id=row['id'];job._persistent_account=row['account']
+            job._desktop_id=row['id'];job._desktop_created_at=row.get('created_at',0);job._persistent_account=row['account']
             p._ensure_live_worker()
         else:
             local=Path(row['local'])
@@ -157,7 +171,9 @@ class Features:
                 if not row.get('remote_id'):raise CloudOperationError('上次提交结果不确定，请先在目标目录核对。为避免重复，未重新上传。')
                 job.commit_started=True;job.remote_id=row['remote_id']
             job._desktop_id=row['id'];p.upload_jobs.append(job);p._ensure_upload_worker()
-        job._desktop_id=row['id'];job._persistent_account=row['account'];job._download_group=row.get('group','');job._group_id=row.get('group_id','');job._priority=row.get('priority',1);self.capture(name)
+        job._desktop_id=row['id'];job._desktop_created_at=row.get('created_at',0);job._persistent_account=row['account'];job._download_group=row.get('group','');job._group_id=row.get('group_id','');job._priority=row.get('priority',1)
+        if row.get('temporary_share'):job._temporary_share=row['temporary_share']
+        self.capture(name)
     async def upload_progress(self,name):self.capture(name,force=True)
     async def action(self,d):
         action=d.get('action');name=d.get('provider');p=self.bridge.panels.get(name)
@@ -170,7 +186,9 @@ class Features:
             row=self.store.get('transfer',d.get('id'))
             if row:
                 command=d.get('command')
-                if command=='resume':await self.resume(row)
+                if command=='cleanup_temp' and row.get('temporary_share') and row['status']=='completed':
+                    await self.share_temp.retry_cleanup(row['temporary_share'],row)
+                elif command=='resume':await self.resume(row)
                 elif command=='cancel':
                     # Keep an unverifiable leftover intact; never unlink an arbitrary stored path.
                     if row.get('checkpoint'):
@@ -259,6 +277,7 @@ class Features:
     async def close(self):
         self.closing=True
         if self.loop_task:self.loop_task.cancel();await asyncio.gather(self.loop_task,return_exceptions=True)
+        await self.share_temp.close()
         await self.sync.close()
         await self.account_status.close()
         for name,p in self.bridge.panels.items():

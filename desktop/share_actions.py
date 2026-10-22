@@ -102,6 +102,7 @@ class ShareActions:
                 plan.update(path=path,folder=folder,root_id=root.id if root else 'root')
             ops.guard(stamp);token=secrets.token_hex(24);self.plans[token]=plan
             return {'token':token,'provider':name,'kind':kind,'names':[x.name for x in items],
+                    'bytes':sum(x.size for x in items if not x.is_dir),
                     'target':plan.get('path','').rstrip('/')+'/'+plan['folder'] if kind=='save' else '',
                     'days':plan.get('days'),'password':plan.get('password')}
         if a!='sharing_commit':raise CloudOperationError('分享操作无效。')
@@ -167,8 +168,13 @@ class ShareActions:
                 await self.quark_task(ops,data.get('task_id'),'save_as')
             for attempt in range(8):
                 rows=await ops.list(folder.path)
-                if all(any(x.name==item.name and x.is_dir==item.is_dir and (x.is_dir or x.size==item.size) for x in rows) for item in plan['items']):
-                    return {'path':folder.path,'count':len(ids)}
+                resolved=[next((x for x in rows if x.name==item.name and x.is_dir==item.is_dir
+                                and (x.is_dir or x.size==item.size)),None) for item in plan['items']]
+                if all(resolved):
+                    return {'path':folder.path,'count':len(ids),'files':[
+                        {'id':x.id,'name':x.name,'path':x.path,'size':x.size,
+                         'type':'folder' if x.is_dir else x.category,'date':x.modified}
+                        for x in resolved]}
                 await asyncio.sleep(.6)
             raise CloudOperationError('服务已接收，但目标文件尚未全部确认。')
         except Exception:

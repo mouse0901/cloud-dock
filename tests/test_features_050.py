@@ -32,6 +32,34 @@ class ThumbnailTests(unittest.IsolatedAsyncioTestCase):
    self.assertEqual(await self.cache.get('a',item,c,lambda:True),data)
    self.assertIsNone(await self.cache.get('a',item,c,lambda:False))
 class MutationTests(unittest.IsolatedAsyncioTestCase):
+ async def test_delete_confirms_recycle_record_beyond_first_page(self):
+  item=CloudFile('wanted','baidu','/wanted.txt',False,4)
+  ops=CloudOperations('baidu',SimpleNamespace());ops.list=AsyncMock(return_value=[item]);ops.call=AsyncMock()
+  async def trash(page=0):
+   return [{'id':str(i),'fid':str(i)} for i in range(50)] if page==0 else [{'id':'record','fid':'wanted'}]
+  ops.trash=AsyncMock(side_effect=trash)
+  await ops.delete([item])
+  self.assertEqual([call.args[0] for call in ops.trash.await_args_list],[0,1])
+  ops.call.assert_awaited_once()
+ async def test_restore_still_in_later_recycle_page_is_not_reported_complete(self):
+  ops=CloudOperations('baidu',SimpleNamespace());ops.call=AsyncMock()
+  async def trash(page=0):
+   return [{'id':str(i),'fid':str(i)} for i in range(50)] if page==0 else [{'id':'999','fid':'file'}]
+  ops.trash=AsyncMock(side_effect=trash)
+  with patch('app.cloud_operations.asyncio.sleep',new_callable=AsyncMock),self.assertRaisesRegex(CloudOperationError,'尚未确认'):
+   await ops.restore({'id':'999','path':''})
+  self.assertIn(1,[call.args[0] for call in ops.trash.await_args_list])
+  ops.call.assert_awaited_once()
+ async def test_restore_disappearance_requires_complete_recycle_scan(self):
+  ops=CloudOperations('baidu',SimpleNamespace());ops.call=AsyncMock();seen=[False]
+  async def trash(page=0):
+   if page==0:return [{'id':str(i),'fid':str(i)} for i in range(50)]
+   if not seen[0]:seen[0]=True;return [{'id':'999','fid':'file'}]
+   return []
+  ops.trash=AsyncMock(side_effect=trash)
+  with patch('app.cloud_operations.asyncio.sleep',new_callable=AsyncMock) as sleep:
+   await ops.restore({'id':'999','path':''})
+  sleep.assert_awaited_once();ops.call.assert_awaited_once()
  async def test_delete_rechecks_id_before_path_write(self):
   ops=CloudOperations('baidu',SimpleNamespace());ops.list=AsyncMock(return_value=[CloudFile('other','baidu','/same')]);ops.call=AsyncMock()
   with self.assertRaises(CloudOperationError):await ops.delete([CloudFile('original','baidu','/same')])
@@ -64,6 +92,18 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
   j=self.job();self.panel.jobs=[j];self.f.capture('baidu');self.panel.jobs=[]
   rows=self.f.archived();self.assertEqual(rows[0]['status'],'paused');self.assertTrue(rows[0]['archived'])
   raw=json.dumps(self.f.store.all('transfer'));self.assertNotIn('http',raw);self.assertNotIn('thumbnail',raw);self.assertNotIn('cookie',raw)
+ async def test_transfer_creation_time_survives_progress_and_archive(self):
+  j=self.job();self.panel.jobs=[j];self.f.capture('baidu')
+  first=self.f.store.get('transfer',j._desktop_id)['created_at']
+  self.assertGreater(first,0)
+  j.done=4;j.state='completed';self.f.capture('baidu')
+  self.assertEqual(self.f.store.get('transfer',j._desktop_id)['created_at'],first)
+  self.panel.jobs=[]
+  self.assertEqual(self.f.archived()[0]['created_at'],first)
+ async def test_legacy_transfer_history_uses_latest_activity_order(self):
+  for key in ('older','newer'):
+   self.f.store.put('transfer',key,{'id':key,'provider':'baidu','account':'account','status':'completed','direction':'download'})
+  self.assertEqual([row['id'] for row in self.f.archived()],['newer','older'])
  async def test_resume_wrong_account_never_starts(self):
   j=self.job();self.panel.jobs=[j];self.f.capture('baidu');row=self.f.store.all('transfer')[0];self.ops.account=AsyncMock(return_value='different')
   with self.assertRaises(CloudOperationError):await self.f.resume(row)

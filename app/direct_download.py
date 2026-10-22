@@ -327,7 +327,10 @@ class DirectDownload:
                     if self._md5_is_content:
                         self._restart_required = True
                         raise DownloadError('download_checksum', '文件校验未通过，请取消任务后重新下载')
-                    self.warning = '文件大小核对通过；网盘摘要与本地不一致，请打开文件确认内容。'
+                    # Some providers publish an MD5-shaped metadata value
+                    # that is not specified as the bytes' content digest.
+                    # A mismatch is therefore not evidence of corruption.
+                    # Size and server-error-payload checks still apply.
             data.seek(0)
             if self.total <= 65536 and not self.checksum_verified:
                 try:

@@ -293,7 +293,7 @@ class LiveDownloadTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(quark.closed)
 
 
-    async def test_completed_advisory_mismatch_displays_warning_and_no_false_checksum_claim(self):
+    async def test_completed_advisory_mismatch_has_no_false_corruption_claim(self):
         panel = self.panel()
         panel.api.download_source.return_value = DownloadSource('https://download.baidu.com/file', 5,
             md5='0' * 32, md5_is_content=False)
@@ -303,8 +303,7 @@ class LiveDownloadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(job.state, 'completed')
         body = panel.render_live_downloads(completed=True).controls[0].content.controls
         text = '\n'.join(c.value for c in body if isinstance(c, ft.Text))
-        self.assertIn('摘要与本地不一致', text)
-        self.assertIn('文件大小核对通过', text)
+        self.assertNotIn('摘要与本地不一致', text)
         self.assertNotIn('MD5核对通过', text)
 
 

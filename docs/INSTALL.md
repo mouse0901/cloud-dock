@@ -8,11 +8,11 @@
 | --- | --- | --- |
 | CloudDock-1.0.0-Setup-x64.exe | 大多数用户 | 安装到当前 Windows 用户，创建开始菜单入口，支持软件内安装更新。 |
 | CloudDock-1.0.0-Windows-x64.zip | 希望随身携带或不安装的用户 | 解压后运行 START.cmd 或 CloudDock.exe；可以检查更新，但不自动替换自身。 |
-| CloudDock-1.0.1-beta.1-Setup-x64.exe | 愿意验证新功能的用户 | 测试版安装包；安装前先退出云屿，建议先备份个人数据目录。 |
-| CloudDock-1.0.1-beta.1-Windows-x64.zip | 希望先用独立数据目录试用的用户 | 解压后使用，不会替换已有安装版。 |
+| CloudDock-1.0.1-beta.7-Setup-x64.exe | 愿意验证新功能的用户 | 测试版安装包；安装前先退出云屿，建议先备份个人数据目录。 |
+| CloudDock-1.0.1-beta.7-Windows-x64.zip | 希望先用独立数据目录试用的用户 | 解压后使用，不会替换已有安装版。 |
 
 请只从 [官方 Release](https://github.com/mouse0901/cloud-dock-releases/releases/latest) 下载，并对照同页的 CHECKSUMS.sha256 核验文件。
-测试版请到 [v1.0.1-beta.1 发布页](https://github.com/mouse0901/cloud-dock-releases/releases/tag/v1.0.1-beta.1) 下载；正式版仍是 1.0.0。
+测试版请到 [v1.0.1-beta.7 发布页](https://github.com/mouse0901/cloud-dock-releases/releases/tag/v1.0.1-beta.7) 下载；正式版仍是 1.0.0。
 
 ## 安装版
 

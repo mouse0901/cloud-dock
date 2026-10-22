@@ -36,12 +36,17 @@ class Experience:
         if not isinstance(ids, list) or len(ids)>500 or any(not isinstance(x,str) for x in ids):
             raise CloudOperationError('请先选择要清理的已完成记录。')
         requested = set(ids)
+        store = self.bridge.features.store
+        for row in store.all('transfer'):
+            if row['id'] in requested and row.get('temporary_share'):
+                state=(store.get('share_temp',row['temporary_share']) or {}).get('state')
+                if state!='recycled':
+                    raise CloudOperationError('临时云端副本尚未完成清理，请先在传输任务中检查感叹号说明。')
         for p in self.bridge.panels.values():
             for jobs in (p.jobs, p.upload_jobs):
                 for j in list(jobs):
                     if getattr(j,'_desktop_id',None) in requested and j.state in ('completed','cancelled'):
                         jobs.remove(j)
-        store = self.bridge.features.store
         for row in store.all('transfer'):
             if row['id'] in requested and row['status'] in ('completed','cancelled'):
                 store.remove('transfer',row['id'])
@@ -90,8 +95,12 @@ class Experience:
                 plan['state']='submitted'
                 features.capture(name,force=True)
                 return {'count':count}
-            except Exception:
+            except BaseException:
+                # A later item may fail after earlier jobs were queued. Publish
+                # and start those jobs before consuming the one-shot plan.
                 plan['state']='failed'
+                p._downloads_changed()
+                p._ensure_live_worker()
                 raise
         if getattr(p,'share',None):raise CloudOperationError('请先返回本人网盘目录。')
         if d.get('context') != self.bridge.context(p) or p.browser_busy:

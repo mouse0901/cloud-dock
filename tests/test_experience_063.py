@@ -107,6 +107,21 @@ class ExperienceTests(unittest.IsolatedAsyncioTestCase):
   result=await self.exp.action(action);self.assertEqual(result['count'],1)
   self.assertTrue((self.panel.download_destination/'assets').is_dir())
   with self.assertRaises(CloudOperationError):await self.exp.action(action)
+ async def test_later_enqueue_failure_keeps_earlier_folder_jobs_visible(self):
+  other=CloudFile('other','baidu','/assets/notes.txt',False,3)
+  self.ops.list.return_value=[self.file,other]
+  token=await self.plan();self.assertEqual(self.exp.plans[token]['count'],2)
+  queued=SimpleNamespace()
+  self.panel.start_download.side_effect=[queued,CloudOperationError('第二项无法加入队列')]
+  action={'action':'folder_confirm','provider':'baidu','token':token}
+  with self.assertRaisesRegex(CloudOperationError,'第二项'):await self.exp.action(action)
+  self.assertEqual(self.panel.start_download.await_count,2)
+  self.assertEqual(queued._group_id,token)
+  self.panel._downloads_changed.assert_called_once()
+  self.panel._ensure_live_worker.assert_called_once()
+  self.assertEqual(self.exp.plans[token]['state'],'failed')
+  with self.assertRaises(CloudOperationError):await self.exp.action(action)
+  self.assertEqual(self.panel.start_download.await_count,2)
  async def test_account_changed_after_preview_never_downloads(self):
   token=await self.plan();self.stamp='B'
   with self.assertRaises(CloudOperationError):await self.exp.action({'action':'folder_confirm','provider':'baidu','token':token})

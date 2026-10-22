@@ -13,7 +13,7 @@ from app.domain import CloudFile
 from app.upload import UploadJob, UploadError, BLOCK_SIZE
 from app.providers.baidu_web import BaiduWebApi
 from app.providers.quark_web import QuarkWebApi
-from app.providers.web_upload import BaiduUploader, QuarkUploader, UploadAdapter
+from app.providers.web_upload import BaiduUploader, QuarkUploader, UploadAdapter, response_bytes
 from app.baidu_web_panel import BaiduWebPanel
 from app.quark_panel import QuarkPanel
 from test_ui_smoke import PageStub
@@ -124,6 +124,44 @@ class UploadTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(UploadError):await job.run()
         self.assertFalse(job.commit_started)
 
+    async def test_baidu_empty_file_upload_confirms_zero_byte_cloud_file(self):
+        self.file.write_bytes(b'')
+        created=[]
+        async def handler(request):
+            self.assertTrue(request.url.path.endswith('/precreate'))
+            form=parse_qs((await request.aread()).decode())
+            self.assertEqual(form['size'],['0'])
+            self.assertEqual(json.loads(form['block_list'][0]),[hashlib.md5(b'').hexdigest()])
+            created.append(CloudFile('7','baidu','/fixture.txt',False,0))
+            return httpx.Response(200,json={'errno':0,'return_type':2,'fs_id':7})
+        api=BaiduWebApi(self.client(handler));api.authenticated=True;api._bdstoken='test-token'
+        api._fetch_files=AsyncMock(side_effect=lambda *_:list(created))
+        job=UploadJob(self.file,'baidu','/',BaiduUploader(api))
+        await job.run()
+        self.assertEqual((job.state,job.total,job.done,job.remote_id),('completed',0,0,'7'))
+
+    async def test_quark_empty_file_hash_finish_confirms_cloud_file(self):
+        self.file.write_bytes(b'')
+        created=[]
+        async def handler(request):
+            data=json.loads(await request.aread())
+            route=request.url.path.split('/1/clouddrive/')[1]
+            if route=='file/upload/pre':
+                self.assertEqual(data['size'],0)
+                value={'task_id':'empty-task'}
+            elif route=='file/update/hash':
+                self.assertEqual(data['md5'],hashlib.md5(b'').hexdigest())
+                self.assertEqual(data['sha1'],hashlib.sha1(b'').hexdigest())
+                created.append(CloudFile('8','quark','/fixture.txt',False,0))
+                value={'finish':True}
+            else:self.fail('unexpected route '+route)
+            return httpx.Response(200,json={'status':200,'code':0,'data':value})
+        api=QuarkWebApi(self.client(handler));api.authenticated=True
+        api._fetch_files=AsyncMock(side_effect=lambda *_:list(created))
+        job=UploadJob(self.file,'quark','/',QuarkUploader(api))
+        await job.run()
+        self.assertEqual((job.state,job.total,job.done),('completed',0,0))
+
     async def test_baidu_login_handoff_scopes_cookie_and_blocks_other_hosts(self):
         seen=[]
         async def handler(r):
@@ -192,6 +230,19 @@ class UploadTests(unittest.IsolatedAsyncioTestCase):
             await job.run()
         self.assertEqual(job.state,'completed');self.assertEqual(len(parts),3)
         self.assertEqual(auth_meta[0], 'PUT\n\ntext/plain\nFri, 16 Oct 2026 00:00:00 GMT\nx-oss-date:Fri, 16 Oct 2026 00:00:00 GMT\nx-oss-user-agent:aliyun-sdk-js/6.6.1\n/fixture/test/file?partNumber=1&uploadId=upload')
+
+    async def test_quark_oss_failure_reports_only_safe_code_and_part(self):
+        secret = "private-object-key-and-ticket"
+        events = []
+        client = self.client(lambda _: httpx.Response(400, text=(
+            "<Error><Code>InvalidArgument</Code><Message>" + secret + "</Message></Error>")))
+        api = QuarkWebApi(client, events.append)
+        with self.assertRaises(UploadError):
+            await response_bytes(client, 'PUT', 'https://fixture.pds.quark.cn/object',
+                diagnostic=api.emit, stage='upload_part', part_number=2)
+        self.assertEqual(events, [{'stage':'upload_part','http_status':400,
+                                   'part_number':2,'oss_code':'InvalidArgument'}])
+        self.assertNotIn(secret, str(events))
 
     async def test_untrusted_quark_destination_rejected(self):
         for address in ('https://evil.test','https://fixture.pds.quark.cn.evil.test','https://user@fixture.pds.quark.cn','https://fixture.pds.quark.cn/?secret=x'):

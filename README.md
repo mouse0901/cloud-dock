@@ -1,6 +1,6 @@
 # 云屿 Cloud Dock
 
-当前正式版本：1.0.0。最新[测试版 1.0.1-beta.1](https://github.com/mouse0901/cloud-dock-releases/releases/tag/v1.0.1-beta.1) 新增加密链接库和“我的分享”本机管理，并改进更新通道切换。
+当前正式版本：1.0.0。最新[测试版 1.0.1-beta.7](https://github.com/mouse0901/cloud-dock-releases/releases/tag/v1.0.1-beta.7) 加入百度分享大文件的临时转存下载、紧凑传输中心、链接库快捷下载，并改善百度与夸克之间的切换速度。
 
 云屿是面向 Windows 的个人网盘桌面工作台，把百度网盘与夸克网盘的浏览、上传下载、同步、分享链接和传输管理放在同一个清晰的工作区。每位用户使用自己的网盘账号，登录会话只保存在当前 Windows 用户的数据目录中。
 

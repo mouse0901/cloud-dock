@@ -19,6 +19,10 @@ class DurableStore:
         row=self.db.execute('SELECT payload FROM records WHERE kind=? AND id=?',(kind,id)).fetchone()
         return json.loads(row[0]) if row else None
     def all(self,kind):return [json.loads(x[0]) for x in self.db.execute('SELECT payload FROM records WHERE kind=?',(kind,))]
+    def recent_transfers(self):
+        # Older releases did not store creation times. Their row order is the
+        # best available approximation of the last transfer activity.
+        return [json.loads(x[0]) for x in self.db.execute("SELECT payload FROM records WHERE kind='transfer' ORDER BY rowid DESC")]
     def count(self,kind):return self.db.execute('SELECT COUNT(*) FROM records WHERE kind=?',(kind,)).fetchone()[0]
     def page(self,kind,offset=0,limit=50):
         return [json.loads(x[0]) for x in self.db.execute("SELECT payload FROM records WHERE kind=? ORDER BY CAST(json_extract(payload,'$.pinned') AS INTEGER) DESC,CAST(json_extract(payload,'$.at') AS REAL) DESC LIMIT ? OFFSET ?",(kind,limit,offset))]

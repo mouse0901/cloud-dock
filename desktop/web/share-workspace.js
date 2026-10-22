@@ -1,7 +1,17 @@
 // Account-bound share previews and explicit download confirmation.
 (()=>{
  const dialog=$('#sheet');let epoch=0;
- dialog.addEventListener('close',()=>{const input=$('#shareInput');if(input)window.cloudDockLinkDraft={text:input.value,password:$('#sharePassword')?.value||''};epoch++;dialog.classList.remove('links-sheet','download-sheet');});
+ let infoPopover=null,infoAnchor=null;
+ function closeInfo(){if(infoPopover)infoPopover.remove();if(infoAnchor)infoAnchor.setAttribute('aria-expanded','false');infoPopover=infoAnchor=null;}
+ function placeInfo(){if(!infoPopover||!infoAnchor?.isConnected)return closeInfo();const a=infoAnchor.getBoundingClientRect(),b=infoPopover.getBoundingClientRect();let left=Math.min(innerWidth-b.width-12,Math.max(12,a.left)),top=a.bottom+8;if(top+b.height>innerHeight-12)top=Math.max(12,a.top-b.height-8);infoPopover.style.left=left+'px';infoPopover.style.top=top+'px';}
+ window.cloudDockInfoPopover=function(anchor,title,text,action=null){
+  if(infoAnchor===anchor){closeInfo();return;}
+  closeInfo();infoAnchor=anchor;anchor.setAttribute('aria-expanded','true');const box=document.createElement('aside');box.className='cloud-info-popover';box.setAttribute('role','dialog');box.setAttribute('aria-label',title);const head=document.createElement('div');head.className='cloud-info-head';head.innerHTML='<span class="share-temp-mark" aria-hidden="true">!</span><strong></strong><button class="icon-button" aria-label="关闭说明">×</button>';head.querySelector('strong').textContent=title;head.querySelector('button').onclick=closeInfo;const body=document.createElement('p');body.textContent=text;box.append(head,body);if(action){const button=document.createElement('button');button.className='quiet cloud-info-action';button.textContent=action.label;button.onclick=async()=>{button.disabled=true;try{await action.run();closeInfo();}catch(e){report(e);button.disabled=false;}};box.append(button);}document.body.append(box);infoPopover=box;placeInfo();
+ };
+ document.addEventListener('pointerdown',e=>{if(infoPopover&&!infoPopover.contains(e.target)&&!infoAnchor?.contains(e.target))closeInfo();},true);
+ document.addEventListener('keydown',e=>{if(e.key==='Escape'&&infoPopover){e.preventDefault();closeInfo();}},true);
+ addEventListener('resize',closeInfo);document.addEventListener('scroll',e=>{if(infoPopover&&!e.target.closest?.('.cloud-info-popover'))closeInfo();},true);
+ dialog.addEventListener('close',()=>{closeInfo();const input=$('#shareInput');if(input)window.cloudDockLinkDraft={text:input.value,password:$('#sharePassword')?.value||''};epoch++;dialog.classList.remove('links-sheet','download-sheet');});
  function panel(title,html,kind='links'){
   epoch++;sheetKind=kind;dialog.classList.remove('tools-sheet','media-sheet','links-sheet','download-sheet');
   dialog.classList.add(kind+'-sheet');sheet(title,html);return epoch;
@@ -42,15 +52,18 @@
     if(resume?.path&&resume.path!=='/'){
      try{let path='';for(const part of resume.path.split('/').filter(Boolean)){path+='/'+part;result=await api('links_list',{session:result.session,path,page:path===resume.path?(resume.page||0):0});if(!alive(id))return;}}catch(e){toast('上次位置暂不可用，已返回可读取的分享目录');}
     }
-    if(alive(id))showFiles(result,input,code||link.password);
+    if(alive(id))showFiles(result,input,code||link.password,resume);
    }catch(e){if(alive(id))error(e);}finally{if(alive(id)){busy=false;$('#shareOpen').disabled=false;}}
   };
+  if(resume?.autoOpen)setTimeout(()=>{if(alive(id))$('#shareOpen').click();},0);
  };
- function showFiles(snapshot,original,password){
-  const id=panel(names[snapshot.provider]+' · 分享文件','<div class="share-breadcrumb"><button id="shareBack" class="quiet">'+icon('left')+'返回链接</button><button id="shareParent" class="quiet">上一级</button><span id="sharePath"></span></div><label class="share-select"><input id="shareSelectAll" type="checkbox">选择本页</label><div id="shareFiles" class="share-files"></div><div class="share-pagination"><button id="sharePrev" class="quiet">上一页</button><span id="sharePage"></span><button id="shareNext" class="quiet">下一页</button></div>'+errorHtml+'<div class="link-actions"><span id="shareCount"></span><button id="shareSaveCloud" class="quiet">转存到网盘…</button><button id="shareDownload" class="primary">'+icon('download')+'下载所选</button></div>');
-  let selected=new Set(),busy=false;
-  function selection(){const count=selected.size;$('#shareCount').textContent=count?'已选择 '+count+' 项':'选择文件或文件夹';$('#shareDownload').disabled=!count||busy;$('#shareSaveCloud').disabled=!count||busy;$('#shareSelectAll').checked=count>0&&count===snapshot.files.length;$('#shareSelectAll').indeterminate=count>0&&count<snapshot.files.length;}
-  async function browse(path,page){if(busy)return;busy=true;render();try{const r=await api('links_list',{session:snapshot.session,path,page});if(!alive(id))return;snapshot=r;selected.clear();}catch(e){if(alive(id))error(e);}finally{if(alive(id)){busy=false;render();}}}
+ function showFiles(snapshot,original,password,intent=null){
+  const source=()=>({provider:snapshot.provider,session:snapshot.session,context:snapshot.context,quick:!!live?.quick_download});
+  if(intent?.download&&snapshot.files.length===1)return downloadDialog(snapshot.files,source());
+  const id=panel(names[snapshot.provider]+' · 分享文件','<div class="share-breadcrumb"><button id="shareBack" class="quiet">'+icon('left')+'返回链接</button><button id="shareParent" class="quiet">上一级</button><span id="sharePath"></span></div><label class="share-select"><input id="shareSelectAll" type="checkbox">选择本页</label><div id="shareFiles" class="share-files"></div><div class="share-pagination"><button id="sharePrev" class="quiet">上一页</button><span id="sharePage"></span><button id="shareNext" class="quiet">下一页</button></div>'+errorHtml+'<p id="shareLargeHint" class="sync-subtle" hidden>部分百度大文件若拿不到分享直链，会在你的网盘中临时转存，下载完成并核对后自动移入回收站。详情见下载确认中的感叹号。</p><div class="link-actions"><span id="shareCount"></span><button id="shareSaveCloud" class="quiet">转存到网盘…</button><button id="shareDownload" class="primary">'+icon('download')+'下载所选</button></div>');
+  let selected=new Set(snapshot.files.length===1?snapshot.files.map(f=>f.id):[]),busy=false;
+  function selection(){const count=selected.size,large=snapshot.provider==='baidu'&&snapshot.files.some(f=>selected.has(f.id)&&f.type!=='folder'&&f.size>=1e9);$('#shareCount').textContent=count?'已选择 '+count+' 项':'选择文件或文件夹';$('#shareDownload').disabled=!count||busy;$('#shareSaveCloud').disabled=!count||busy;$('#shareLargeHint').hidden=!large;$('#shareSelectAll').checked=count>0&&count===snapshot.files.length;$('#shareSelectAll').indeterminate=count>0&&count<snapshot.files.length;}
+  async function browse(path,page){if(busy)return;busy=true;render();try{const r=await api('links_list',{session:snapshot.session,path,page});if(!alive(id))return;snapshot=r;selected=new Set(r.files.length===1?r.files.map(f=>f.id):[]);}catch(e){if(alive(id))error(e);}finally{if(alive(id)){busy=false;render();}}}
   function render(){
    $('#sharePath').textContent=snapshot.path;$('#sharePath').title=snapshot.path;
    $('#shareParent').disabled=busy||snapshot.path==='/';$('#sharePrev').disabled=busy||!snapshot.previous;$('#shareNext').disabled=busy||!snapshot.next;$('#shareSelectAll').disabled=busy||!snapshot.files.length;
@@ -60,7 +73,7 @@
     const row=document.createElement('div');row.className='share-file';
     const check=document.createElement('input');check.type='checkbox';check.checked=selected.has(file.id);check.disabled=busy;check.setAttribute('aria-label','选择 '+file.name);check.onchange=()=>{check.checked?selected.add(file.id):selected.delete(file.id);selection();};
     const b=document.createElement('button');b.className='share-file-name';b.disabled=busy;b.innerHTML=fileIcon(file)+'<span>'+esc(file.name)+'</span>';b.title=file.name;b.onclick=()=>{if(file.type==='folder')browse(file.path,0);else{check.checked=!check.checked;check.onchange();}};
-    const size=document.createElement('small');size.textContent=file.type==='folder'?'文件夹':bytes(file.size);row.append(check,b,size);list.append(row);
+    const size=document.createElement('small');size.textContent=file.type==='folder'?'文件夹':bytes(file.size);const download=document.createElement('button');download.className='icon-button share-file-download';download.title=file.type==='folder'?'下载此文件夹':'直接下载此文件';download.setAttribute('aria-label',download.title);download.innerHTML=icon('download');download.disabled=busy;download.onclick=()=>downloadDialog([file],source());row.append(check,b,size,download);list.append(row);
    });selection();
   }
   $('#shareBack').onclick=()=>window.openShareWorkspace(original,password);
@@ -68,13 +81,17 @@
   $('#sharePrev').onclick=()=>browse(snapshot.path,snapshot.page-1);$('#shareNext').onclick=()=>browse(snapshot.path,snapshot.page+1);
   $('#shareSelectAll').onchange=e=>{selected=e.target.checked?new Set(snapshot.files.map(f=>f.id)):new Set();render();};
   $('#shareSaveCloud').onclick=()=>window.cloudDockShareSave(snapshot,snapshot.files.filter(f=>selected.has(f.id)));
-  $('#shareDownload').onclick=()=>downloadDialog(snapshot.files.filter(f=>selected.has(f.id)),{provider:snapshot.provider,session:snapshot.session,context:snapshot.context});render();
+  $('#shareDownload').onclick=()=>downloadDialog(snapshot.files.filter(f=>selected.has(f.id)),source());render();
  }
  async function downloadDialog(files,source){
   let quickTried=false;
   if(!files.length)return;
-  const id=panel('下载文件','<div class="download-summary">'+icon(files.length===1&&files[0].type==='folder'?'folder':'download')+'<div><strong id="downloadName"></strong><small id="downloadSummary" role="status">正在确认文件清单…</small></div></div><div class="download-location"><span>下载到</span><span id="downloadPath"></span><button id="downloadChoose" class="icon-button" aria-label="选择保存文件夹" title="选择保存文件夹" disabled>'+icon('folder')+'</button></div><label class="download-remember"><input id="downloadRemember" type="checkbox">设为默认下载位置</label><label class="download-remember"><input id="downloadQuick" type="checkbox" disabled>以后单个文件直接下载到默认位置</label><p class="sync-subtle">文件夹、分享和已有同名文件仍会确认。可在设置中关闭。</p>'+errorHtml+'<div class="link-actions"><button id="downloadCancel" class="quiet">取消</button><button id="downloadCommit" class="primary" disabled>开始下载</button></div>','download');
+  const baiduShare=source.provider==='baidu'&&!!source.session;
+  const tempText='当百度未提供可用的分享直链时，云屿会先将文件转存到你百度网盘的“CloudDock 临时下载”目录，临时占用同等网盘空间，再下载到本机。确认本地文件完整后，只把本次创建的临时目录移入回收站；失败、暂停、取消或退出时不会提前删除。回收站中的文件可能继续占用空间，必要时可自行清理。';
+  const explanation=baiduShare?'<button id="downloadTempInfo" class="share-temp-notice" type="button" aria-expanded="false"><span class="share-temp-mark" aria-hidden="true">!</span><span>百度大文件可能临时占用网盘空间</span><small>查看说明</small></button>':'';
+  const id=panel('下载文件','<div class="download-summary">'+icon(files.length===1&&files[0].type==='folder'?'folder':'download')+'<div><strong id="downloadName"></strong><small id="downloadSummary" role="status">正在确认文件清单…</small></div></div>'+explanation+'<div class="download-location"><span>下载到</span><span id="downloadPath"></span><button id="downloadChoose" class="icon-button" aria-label="选择保存文件夹" title="选择保存文件夹" disabled>'+icon('folder')+'</button></div><label class="download-remember"><input id="downloadRemember" type="checkbox">设为默认下载位置</label><label class="download-remember"><input id="downloadQuick" type="checkbox" disabled>以后单个文件直接下载到默认位置</label><p class="sync-subtle">文件夹和已有同名文件仍会确认；分享大文件的临时转存状态会显示在传输页。可在设置中关闭。</p>'+errorHtml+'<div class="link-actions"><button id="downloadCancel" class="quiet">取消</button><button id="downloadCommit" class="primary" disabled>开始下载</button></div>','download');
   $('#downloadName').textContent=files.length===1?files[0].name:files[0].name+' 等 '+files.length+' 项';let token=null,timer,submitted=false,pickId=null,committing=false;
+  if($('#downloadTempInfo'))$('#downloadTempInfo').onclick=e=>window.cloudDockInfoPopover(e.currentTarget,'大文件下载说明',tempText);
   const native=window.chrome?.webview;
   $('#downloadRemember').onchange=()=>{$('#downloadQuick').disabled=!$('#downloadRemember').checked;if($('#downloadQuick').disabled)$('#downloadQuick').checked=false;};
   function cleanup(){clearTimeout(timer);native?.removeEventListener('message',picked);if(token&&!submitted)api('download_cancel',{token}).catch(()=>{});}
@@ -86,9 +103,9 @@
   $('#downloadChoose').onclick=()=>{if(!native){error(Error('请在桌面窗口中选择保存文件夹'));return;}pickId='download-'+(++requestSerial);$('#downloadChoose').disabled=true;$('#downloadCommit').disabled=true;native.postMessage({type:'pickDirectory',id:pickId});};
   $('#downloadCommit').onclick=()=>commit(false);
   async function commit(quick){
-   if(committing)return;committing=true;$('#downloadCommit').disabled=true;$('#downloadChoose').disabled=true;$('#downloadCancel').disabled=true;
+   if(committing)return;committing=true;$('#downloadCommit').disabled=true;$('#downloadChoose').disabled=true;$('#downloadCancel').disabled=true;if(baiduShare)$('#downloadSummary').textContent='正在检查下载地址，必要时准备临时云端副本…';
    try{const r=await api(quick?'download_quick':'download_commit',{token,remember:!quick&&$('#downloadRemember').checked,quick:!quick&&$('#downloadQuick').checked});if(r.confirmation_required){committing=false;$('#downloadCommit').disabled=$('#downloadChoose').disabled=$('#downloadCancel').disabled=false;return;}submitted=true;if(alive(id)){dialog.close();toast(r.count?'已加入 '+r.count+' 个下载任务':'目录已创建，所选文件已在任务列表中');await refreshState();}}
-   catch(e){if(alive(id)){error(e);$('#downloadCancel').disabled=false;}}
+   catch(e){if(alive(id)){committing=false;error(e);$('#downloadCommit').disabled=false;$('#downloadChoose').disabled=false;$('#downloadCancel').disabled=false;}}
   };
   try{const row=await api('download_prepare',{...source,ids:files.map(f=>f.id)});token=row.token;if(!alive(id)){cleanup();return;}draw(row);if(row.state==='scanning')timer=setTimeout(poll,100);}catch(e){if(alive(id))error(e);}
  }

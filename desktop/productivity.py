@@ -119,7 +119,6 @@ class Productivity:
             kind=d.get('kind')
             if kind not in ('mkdir','rename','move','copy'):raise CloudOperationError('未知文件操作。')
             if kind!='mkdir' and item is None:raise CloudOperationError('请选择当前目录中的项目。')
-            if kind=='copy' and name!='baidu':raise CloudOperationError('夸克暂未接入云端复制。')
             title=file_name(d.get('name')) if kind in ('mkdir','rename') else item.name
             target=cloud_path(d.get('target',p.path)) if kind in ('move','copy') else p.path
             if item and item.is_dir and (target==item.path or target.startswith(item.path+'/')):raise CloudOperationError('不能把文件夹放进自身或子目录。')

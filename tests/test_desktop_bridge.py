@@ -38,6 +38,15 @@ class DesktopBridgeTests(unittest.IsolatedAsyncioTestCase):
   r=await self.client.get(self.url+'api/state');self.assertEqual(r.status_code,200)
   d=r.json();self.assertEqual(d['providers']['baidu']['files'][0]['name'],'test.txt')
   self.assertFalse(any(x in r.text.lower() for x in ['bduss','stoken','auth_info','native_key']))
+ async def test_transfer_list_orders_new_tasks_before_archived_history(self):
+  def job(key,created):
+   return SimpleNamespace(_desktop_id=key,_desktop_created_at=created,item=CloudFile(key,'baidu','/'+key+'.txt',size=4),
+                          direction='download',state='queued',done=0,total=4,speed=0,error='',requires_restart=False,target='')
+  panel=self.bridge.panels['baidu'];panel.jobs=[job('old-live',10),job('new-live',30)]
+  previous=self.bridge.features
+  self.bridge.features=SimpleNamespace(accounts={},archived=lambda:[{'id':'archived','provider':'baidu','created_at':20}],store=None)
+  try:self.assertEqual([row['id'] for row in self.bridge.tasks()],['new-live','archived','old-live'])
+  finally:self.bridge.features=previous;panel.jobs=[]
  async def test_origin_and_content_type_protected(self):
   body={'action':'logout','provider':'baidu'}
   self.assertEqual((await self.client.post(self.url+'api/action',json=body,headers={'Origin':'https://evil.example'})).status_code,403)

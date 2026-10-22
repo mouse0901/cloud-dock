@@ -2,6 +2,7 @@
 import asyncio,secrets,time
 from pathlib import Path,PurePosixPath
 from app.cloud_operations import CloudOperationError
+from app.direct_download import DownloadError
 from app.local_files import prepare_download_root
 from desktop.experience import Experience
 
@@ -70,7 +71,7 @@ class DownloadDialog:
             from app.direct_download import _safe_name
             eligible=(row['state']=='ready' and settings.get('quick_download') is True
                       and settings.get('download_directory_confirmed') is True
-                      and not row['share_key'] and not row['folders'] and row['count']==1
+                      and not row['folders'] and row['count']==1
                       and row['destination']==settings['download_dir'])
             if eligible:
                 item,parent=row['items'][0]
@@ -93,7 +94,18 @@ class DownloadDialog:
         if action!='download_commit' or row['state']!='ready':raise CloudOperationError('下载清单尚未准备好或已提交。')
         row['state']='submitting'
         try:
-            root=Path(row['destination']);Experience.check_disk(root,row['bytes']);Experience.safe_directory(root,root)
+            root=Path(row['destination']);Experience.check_disk(root,row['bytes'])
+            fallback=set()
+            if row['provider']=='baidu' and row['share_key'] and row['resolver']:
+                for item,_ in row['items']:
+                    if item.size<1_000_000_000:continue
+                    try:await row['resolver'](item)
+                    except DownloadError as error:
+                        if error.code!='share_ticket_unavailable':
+                            row['state']='ready'
+                            raise CloudOperationError(str(error)) from None
+                        fallback.add((item.id,item.path))
+            Experience.safe_directory(root,root)
             for directory in row['directories']:Experience.safe_directory(Path(directory),root)
             if d.get('remember') is True:
                 self.bridge.workspace.settings['download_dir']=str(root)
@@ -104,10 +116,20 @@ class DownloadDialog:
             count=0
             for item,parent in row['items']:
                 self.guard(row)
-                job=await row['panel'].start_download(item,destination=parent,group=row['group'],notify=False,
-                    resolver_override=row['resolver'],share_key=row['share_key'])
+                queued_item=item;resolver=row['resolver'];share_key=row['share_key'];temporary=None
+                if (item.id,item.path) in fallback:
+                    queued_item,temporary=await self.bridge.features.share_temp.stage(row,item)
+                    resolver=None;share_key=''
+                job=await row['panel'].start_download(queued_item,destination=parent,group=row['group'],notify=False,
+                    resolver_override=resolver,share_key=share_key)
                 if job is not None:
                     job._group_id=d['token'];count+=1
+                    if temporary:
+                        job._share_download=False
+                        job._desktop_id=secrets.token_hex(12)
+                        self.bridge.features.share_temp.queued(temporary,job)
+                elif temporary:
+                    raise CloudOperationError('临时文件已转存至网盘，但下载任务未能创建。请在 CloudDock 临时下载中核对。')
             if row['share_key']:self.bridge.shares.session(row['share_key'])['used']=True
             row['panel']._downloads_changed();row['panel']._ensure_live_worker()
             self.bridge.features.capture(row['provider'],force=True);row['state']='submitted'
@@ -117,7 +139,8 @@ class DownloadDialog:
             # Already-created jobs remain visible and runnable if a later item
             # fails. This consumed plan cannot enqueue them a second time.
             row['panel']._downloads_changed();row['panel']._ensure_live_worker()
-            row['state']='failed';raise
+            if row['state']!='ready':row['state']='failed'
+            raise
     @staticmethod
     def snapshot(row):return {k:row[k] for k in ('state','count','bytes','folders','error','destination','group','names')}
     async def close(self):

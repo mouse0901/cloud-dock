@@ -96,7 +96,10 @@ class QuarkPanel(RememberLoginMixin, LiveBrowserMixin, LiveDownloadMixin, BaiduP
             value = event.get(key)
             if isinstance(value, str) and re.fullmatch(r"[a-z_]{1,40}", value):
                 safe[key] = value
-        for key in ("http_status", "response_bytes", "service_code", "entry_count"):
+        value = event.get("oss_code")
+        if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_]{1,64}", value):
+            safe["oss_code"] = value
+        for key in ("http_status", "response_bytes", "service_code", "entry_count", "part_number"):
             value = event.get(key)
             if type(value) is int and -10**9 <= value <= 10**9:
                 safe[key] = value

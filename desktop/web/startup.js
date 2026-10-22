@@ -17,12 +17,12 @@
   soundButton.id='completionSound';soundButton.className='switch';soundButton.setAttribute('role','switch');soundButton.setAttribute('aria-label','传输完成提示音');
   function updateSound(){soundButton.classList.toggle('on',soundEnabled);soundButton.setAttribute('aria-checked',String(soundEnabled));}updateSound();sound.replaceWith(soundButton);
   soundButton.onclick=async()=>{soundButton.disabled=true;try{await api('sound',{value:!soundEnabled});soundEnabled=!soundEnabled;updateSound();}catch(e){report(e);}finally{soundButton.disabled=false;}};
-  const release=document.createElement('div');release.className='setting-line';release.innerHTML='<span>关于云屿<small>1.0.1-beta.1 · 本地测试版</small></span><button class="quiet" id="releaseNotes">更新说明</button>';body.append(release);
-  $('#releaseNotes').onclick=()=>sheet('云屿 1.0.1-beta.1', '<p>打开分享时自动保存到独立链接库，可搜索、编辑、置顶、批量整理和撤销移除。</p><p>新增“我的分享”本机记录管理；优化创建分享和重命名操作；修复正式版、测试版更新通道切换被刷新打断的问题。</p><p>这是本地测试版，尚未发布到 GitHub 更新通道。作者：马蹄疾。</p>');
+  const version=String(live?.version||'');const release=document.createElement('div');release.className='setting-line';release.innerHTML='<span>关于云屿<small>'+esc(version)+' · 本地测试版</small></span><button class="quiet" id="releaseNotes">更新说明</button>';body.append(release);
+  $('#releaseNotes').onclick=()=>sheet('云屿 '+version, '<p>百度分享大文件在直链不可用时，可在云屿内自动临时转存后下载。传输任务会提示临时目录的清理状态。</p><p>完整记录请查看“完整更新日志”。本地测试版尚未发布到 GitHub 更新通道。作者：马蹄疾。</p>');
   const diagnostics=document.createElement('div');diagnostics.className='setting-line';diagnostics.innerHTML='<span>诊断报告<small>只导出版本与状态统计，不含凭证、文件名和路径。</small></span><button class="quiet" id="exportDiagnostics">导出诊断…</button>';body.append(diagnostics);
   $('#exportDiagnostics').disabled=!native;$('#exportDiagnostics').onclick=()=>native.postMessage({type:'exportDiagnostics'});
   if(live?.migration_notice){const note=document.createElement('p');note.className='sync-callout';note.textContent='已从便携版导入数据。自动任务已暂停，请在同步中核对位置后继续；原便携版仍保留，请使用安装版入口。';body.append(note);}
-  const about=document.createElement('p');about.className='setting-about';about.textContent='云屿 1.0.1-beta.1 · 本地测试版。关闭到托盘后继续运行；退出后停止。登录会话仅加密保存在本机。';body.append(about);if(exit)body.append(exit);
+  const about=document.createElement('p');about.className='setting-about';about.textContent='云屿 '+version+' · 本地测试版。关闭到托盘后继续运行；退出后停止。登录会话仅加密保存在本机。';body.append(about);if(exit)body.append(exit);
   $('#startupSwitch').onclick=()=>{const b=$('#startupSwitch');b.disabled=true;native?.postMessage({type:'setStartup',enabled:!startupState?.registered});};
   updateStartup();native?.postMessage({type:'startupStatus'});
  };$('#settings').onclick=settings;

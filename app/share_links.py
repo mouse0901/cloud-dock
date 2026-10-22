@@ -7,7 +7,7 @@ CODE=re.compile(r'(?:提取码|提取密码|访问码|密码|code)\s*[:：=]?\s*
 def parse_links(text):
     if not isinstance(text,str) or len(text)>16384:return []
     text=text.replace('\\:',':').replace('\\&','&').replace('\\/','/')
-    matches=list(LINK.finditer(text));result=[];seen=set()
+    matches=list(LINK.finditer(text));result=[];positions={}
     for i,match in enumerate(matches):
         try:
             u=urlsplit(match[0]);host=(u.hostname or '').lower()
@@ -24,8 +24,16 @@ def parse_links(text):
                 found=CODE.search(text[match.end():min(end,match.end()+120)])
                 code=found[1] if found else ''
             base='https://'+host+path
-            if base in seen:continue
-            seen.add(base)
+            if base in positions:
+                # A pasted message may repeat the same share, with the access
+                # code only on a later occurrence. Keep one record, but do not
+                # discard the usable code or replace an earlier valid code.
+                existing=result[positions[base]]
+                if code and not existing['password']:
+                    existing['password']=code
+                    existing['url']=base+'?'+urlencode({'pwd':code})
+                continue
+            positions[base]=len(result)
             result.append({'provider':'baidu' if host=='pan.baidu.com' else 'quark','url':base+('?' + urlencode({'pwd':code}) if code else ''),'password':code})
         except (ValueError,UnicodeError):continue
     return result

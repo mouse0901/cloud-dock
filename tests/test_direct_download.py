@@ -443,14 +443,14 @@ class DirectDownloadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(transfer.part.read_bytes(), b'changed')
 
 
-    async def test_advisory_md5_mismatch_completes_with_explicit_warning(self):
+    async def test_advisory_md5_mismatch_completes_without_false_corruption_warning(self):
         source = DownloadSource(URL, 5, md5='0' * 32, md5_is_content=False)
         transfer, _, _ = self.make(lambda req: httpx.Response(200, content=b'hello'),
                                    resolver=AsyncMock(return_value=source))
         self.assertEqual((await transfer.run()).read_bytes(), b'hello')
         self.assertEqual(transfer.state, 'completed')
         self.assertFalse(transfer.checksum_verified)
-        self.assertIn('摘要与本地不一致', transfer.warning)
+        self.assertEqual(transfer.warning, '')
         self.assertFalse(transfer.requires_restart)
         self.assertFalse(transfer.part.exists())
 

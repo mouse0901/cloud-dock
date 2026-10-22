@@ -116,7 +116,7 @@ class TransferManagement:
             except OSError:
                 p.jobs.remove(job)
                 raise CloudOperationError('原临时文件被占用，请关闭占用程序后重试。') from None
-            for key in ('_desktop_id', '_download_group', '_group_id', '_priority', '_persistent_account'):
+            for key in ('_desktop_id', '_desktop_created_at', '_download_group', '_group_id', '_priority', '_persistent_account'):
                 if hasattr(old, key): setattr(job, key, getattr(old, key))
             p.jobs.remove(old); f.capture(name, force=True); p._ensure_live_worker()
         else:

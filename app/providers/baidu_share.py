@@ -53,9 +53,15 @@ class BaiduShare:
         output=[]
         for row in rows:
             try:
-                fid=str(row['fs_id']);name=row['server_filename'];raw=row['path'];amount=row['size'];directory=str(row['isdir'])
+                fid=str(row['fs_id']);name=row['server_filename'];amount=row['size'];directory=str(row['isdir'])
                 if not re.fullmatch(r'\d{1,25}',fid) or not isinstance(name,str) or name in ('','.','..') or any(c in name for c in '/\\') or any(ord(c)<32 for c in name):raise ValueError()
-                if not valid_path(raw) or directory not in ('0','1') or type(amount) is not int or amount<0:raise ValueError()
+                if directory not in ('0','1') or type(amount) is not int or amount<0:raise ValueError()
+                # A shared file's service-side path can be an opaque marker.
+                # We never use it for display or downloading: construct the
+                # visible path from its validated name and parent instead.
+                # Directory paths, by contrast, become the next list request.
+                raw=row.get('path') if directory=='1' else None
+                if directory=='1' and not valid_path(raw):raise ValueError()
                 path=parent.rstrip('/')+'/'+name
                 item=CloudFile(fid,'baidu',path,directory=='1',amount,
                     datetime.fromtimestamp(int(row.get('server_mtime',0))).strftime('%Y-%m-%d %H:%M'),str(row.get('md5','')))
@@ -81,8 +87,20 @@ class BaiduShare:
             data={'encrypt':0,'product':'share','type':'nolimit','primaryid':self.id,'uk':self.uk,
                   'fid_list':json.dumps([int(item.id)]),'extra':json.dumps({'sekey':unquote(self.sekey)})}
             body=self.success((await self.request('api/sharedownload',params,data)).json());rows=body.get('list')
-            if not isinstance(rows,list) or len(rows)!=1 or str(rows[0].get('fs_id'))!=item.id or rows[0].get('size')!=item.size:
-                raise CloudOperationError('分享文件已变化，请重新打开。')
+            if isinstance(rows,str):
+                # Some large shares return an opaque string to the web client
+                # profile. A second, bounded request using the established
+                # client download profile may return the ordinary file list.
+                # Never decode or trust the opaque payload itself.
+                params['clienttype']=12
+                alternate=(await self.request('api/sharedownload',params,data)).json()
+                if isinstance(alternate,dict) and str(alternate.get('errno'))=='9019':
+                    raise DownloadError('share_ticket_unavailable','百度未提供可用的分享下载地址。')
+                body=self.success(alternate);rows=body.get('list')
+            if isinstance(rows,str):
+                raise DownloadError('share_ticket_unavailable','百度返回了无法使用的分享下载票据。')
+            if not isinstance(rows,list) or len(rows)!=1 or not isinstance(rows[0],dict) or str(rows[0].get('fs_id'))!=item.id or rows[0].get('size')!=item.size:
+                raise CloudOperationError('分享下载信息与所选文件不一致，请重新打开后核对。')
             if item.revision and rows[0].get('md5') and rows[0]['md5']!=item.revision:
                 raise CloudOperationError('分享文件已变化，请重新打开。')
             return DownloadSource(checked_download_url(rows[0].get('dlink')),item.size,{'User-Agent':'pan.baidu.com','Referer':'https://pan.baidu.com/'})

@@ -8,6 +8,7 @@ from app.providers.baidu_share import BaiduShare
 from app.providers.baidu_locate import BaiduLocate,tier
 from app.providers.baidu_web import BaiduWebApi
 from app.cloud_operations import CloudOperationError
+from app.direct_download import DownloadError
 from app.domain import CloudFile
 from desktop.download_dialog import DownloadDialog
 from desktop.experience import Experience
@@ -19,6 +20,14 @@ class LinkParsing(unittest.TestCase):
  def test_markdown_duplicate_and_separate_codes(self):
   links=parse_links('[链接](https://pan.quark.cn/s/abcdef12) https://pan.quark.cn/s/abcdef12\nhttps://pan.baidu.com/s/1abcdef 提取码：ZZ11')
   self.assertEqual(len(links),2);self.assertEqual(links[0]['password'],'');self.assertEqual(links[1]['password'],'ZZ11')
+ def test_later_duplicate_can_supply_missing_code_without_overwriting_one(self):
+  text=('https://pan.quark.cn/s/abcdef12 '\
+        'https://pan.quark.cn/s/abcdef12?pwd=W2pz '\
+        'https://pan.quark.cn/s/abcdef12?pwd=ZZ11')
+  links=parse_links(text)
+  self.assertEqual(len(links),1)
+  self.assertEqual(links[0]['password'],'W2pz')
+  self.assertEqual(links[0]['url'],'https://pan.quark.cn/s/abcdef12?pwd=W2pz')
  def test_legacy_and_unsafe(self):
   self.assertEqual(parse_links('https://pan.baidu.com/share/init?surl=abcdef&pwd=Ab12')[0]['url'],'https://pan.baidu.com/s/1abcdef?pwd=Ab12')
   for bad in ['https://pan.baidu.com.evil.test/s/1abcdef','https://pan.quark.cn@evil.test/s/abcdef12','https://pan.baidu.com:123/s/1abcdef','https://pan.baidu.com/s/1abcdef.exe','https://pan.quark.cn/s/abcdef12/extra','x'*16385,None]:self.assertEqual(parse_links(bad),[])
@@ -53,6 +62,63 @@ class LocateTests(unittest.IsolatedAsyncioTestCase):
   self.assertEqual(tier({'is_vip':1,'is_svip':1}),'svip');self.assertEqual(tier({'is_vip':1}),'vip');self.assertEqual(tier({}),'unknown')
 
 class ShareTests(unittest.IsolatedAsyncioTestCase):
+ async def test_shared_file_opaque_service_path_does_not_block_open(self):
+  share=BaiduShare(None,{'url':'https://pan.baidu.com/s/1abcdef','password':''})
+  rows=share.decode([{'fs_id':12,'server_filename':'readme.txt','path':'xxx','size':3,'isdir':0}],'/')
+  self.assertEqual((rows[0].path,rows[0].size),('/readme.txt',3))
+  self.assertEqual(share.files['12'],rows[0])
+  with self.assertRaisesRegex(CloudOperationError,'分享文件信息无法确认'):
+   share.decode([{'fs_id':13,'server_filename':'folder','path':'xxx','size':0,'isdir':1}],'/')
+ async def test_opaque_share_ticket_is_not_misreported_as_changed_file(self):
+  item=CloudFile('12','baidu','/large.bin',False,1024)
+  profiles=[]
+  async def request(route,params=None,data=None):
+   if route=='share/tplconfig':return httpx.Response(200,json={'errno':0,'data':{'sign':'abcdefgh','timestamp':123}})
+   profiles.append(params['clienttype'])
+   return httpx.Response(200,json={'errno':0,'list':'opaqueEncodedData'})
+  share=BaiduShare(None,{'url':'https://pan.baidu.com/s/1abcdef','password':''})
+  share.files[item.id]=item;share.id='1';share.uk='2';share.request=request
+  with self.assertRaisesRegex(Exception,'无法使用的分享下载票据'):
+   await share.source(item)
+  self.assertEqual(profiles,[0,12])
+ async def test_opaque_web_share_ticket_retries_client_profile_and_checks_file(self):
+  item=CloudFile('12','baidu','/large.bin',False,1024)
+  profiles=[]
+  async def request(route,params=None,data=None):
+   if route=='share/tplconfig':return httpx.Response(200,json={'errno':0,'data':{'sign':'abcdefgh','timestamp':123}})
+   profiles.append(params['clienttype'])
+   if params['clienttype']==0:return httpx.Response(200,json={'errno':0,'list':'opaqueEncodedData'})
+   return httpx.Response(200,json={'errno':0,'list':[{'fs_id':12,'size':1024,'dlink':'https://d.pcs.baidu.com/large.bin'}]})
+  share=BaiduShare(None,{'url':'https://pan.baidu.com/s/1abcdef','password':''})
+  share.files[item.id]=item;share.id='1';share.uk='2';share.request=request
+  source=await share.source(item)
+  self.assertEqual(source.size,1024)
+  self.assertEqual(profiles,[0,12])
+ async def test_large_share_alternate_profile_denial_is_not_called_expired(self):
+  item=CloudFile('12','baidu','/large.bin',False,1024)
+  profiles=[]
+  async def request(route,params=None,data=None):
+   if route=='share/tplconfig':return httpx.Response(200,json={'errno':0,'data':{'sign':'abcdefgh','timestamp':123}})
+   profiles.append(params['clienttype'])
+   if params['clienttype']==0:return httpx.Response(200,json={'errno':0,'list':'opaqueEncodedData'})
+   return httpx.Response(200,json={'errno':9019})
+  share=BaiduShare(None,{'url':'https://pan.baidu.com/s/1abcdef','password':''})
+  share.files[item.id]=item;share.id='1';share.uk='2';share.request=request
+  with self.assertRaisesRegex(DownloadError,'未提供可用的分享下载地址') as error:
+   await share.source(item)
+  self.assertEqual(error.exception.code,'share_ticket_unavailable')
+  self.assertNotIn('失效',str(error.exception))
+  self.assertEqual(profiles,[0,12])
+ async def test_client_profile_cannot_swap_large_share_file(self):
+  item=CloudFile('12','baidu','/large.bin',False,1024)
+  async def request(route,params=None,data=None):
+   if route=='share/tplconfig':return httpx.Response(200,json={'errno':0,'data':{'sign':'abcdefgh','timestamp':123}})
+   if params['clienttype']==0:return httpx.Response(200,json={'errno':0,'list':'opaqueEncodedData'})
+   return httpx.Response(200,json={'errno':0,'list':[{'fs_id':13,'size':1024,'dlink':'https://d.pcs.baidu.com/other.bin'}]})
+  share=BaiduShare(None,{'url':'https://pan.baidu.com/s/1abcdef','password':''})
+  share.files[item.id]=item;share.id='1';share.uk='2';share.request=request
+  with self.assertRaisesRegex(Exception,'所选文件不一致'):
+   await share.source(item)
  async def test_code_directory_ticket_and_untrusted_script(self):
   row={'fs_id':12,'server_filename':'图.png','path':'/original/图.png','size':2,'isdir':0}
   seen=[]
@@ -120,18 +186,23 @@ class DownloadPlans(unittest.IsolatedAsyncioTestCase):
   self.assertEqual(result['count'],1)
   with self.assertRaises(CloudOperationError):await self.dialog.action({'action':'download_quick','token':token})
   self.assertEqual(self.panel.start_download.await_count,1)
- async def test_quick_conflict_folder_share_and_account_change_need_confirmation(self):
+ async def test_quick_conflict_folder_and_account_change_need_confirmation(self):
   self.bridge.workspace.settings.update(quick_download=True,download_directory_confirmed=True)
   (self.root/'downloads').mkdir();(self.root/'downloads/a.txt').write_text('existing')
   token=await self.prepare();result=await self.dialog.action({'action':'download_quick','token':token})
   self.assertTrue(result['confirmation_required']);self.assertEqual((self.root/'downloads/a.txt').read_text(),'existing')
   for ids in (['2'],['1','2']):
    token=await self.prepare(ids);self.assertTrue((await self.dialog.action({'action':'download_quick','token':token}))['confirmation_required'])
-  token=await self.prepare();self.dialog.plans[token]['share_key']='share'
-  self.assertTrue((await self.dialog.action({'action':'download_quick','token':token}))['confirmation_required'])
   self.stamp='other'
   with self.assertRaises(CloudOperationError):await self.dialog.action({'action':'download_quick','token':token})
   self.panel.start_download.assert_not_awaited()
+ async def test_quick_single_share_file_uses_confirmed_default(self):
+  self.bridge.workspace.settings.update(quick_download=True,download_directory_confirmed=True)
+  token=await self.prepare();row=self.dialog.plans[token];row['share_key']='share';row['resolver']=AsyncMock()
+  result=await self.dialog.action({'action':'download_quick','token':token})
+  self.assertEqual(result['count'],1);self.assertEqual(self.panel.start_download.await_count,1)
+  self.assertEqual(self.panel.start_download.await_args.kwargs['share_key'],'share')
+  self.assertTrue(self.share_session['used'])
  async def test_quick_off_and_invalid_preference(self):
   for value in ('true',1,None):
    with self.assertRaises(CloudOperationError):await self.dialog.action({'action':'download_preferences','quick':value})
@@ -142,7 +213,7 @@ class DownloadPlans(unittest.IsolatedAsyncioTestCase):
   self.ops=SimpleNamespace(account=AsyncMock(return_value='account'),stamp=lambda:self.stamp,guard=self.guard,list=AsyncMock(return_value=[]))
   self.file=CloudFile('1','baidu','/docs/a.txt',False,2);self.folder=CloudFile('2','baidu','/docs/dir',True)
   self.panel=SimpleNamespace(api=SimpleNamespace(authenticated=True),reader=object(),generation=1,browser_busy=False,browser_rows=[self.file,self.folder],path='/docs',start_download=AsyncMock(return_value=SimpleNamespace()),_downloads_changed=Mock(),_ensure_live_worker=Mock(),set_download_root=Mock())
-  self.bridge=SimpleNamespace(panels={'baidu':self.panel},features=SimpleNamespace(ops={'baidu':self.ops},accounts={},capture=Mock()),workspace=SimpleNamespace(settings={'download_dir':str(self.root/'downloads')},save=AsyncMock()),context=lambda p:'ctx',selected_paths=lambda s,k:[str(self.root/'chosen')])
+  self.share_session={'used':False};self.bridge=SimpleNamespace(panels={'baidu':self.panel},features=SimpleNamespace(ops={'baidu':self.ops},accounts={},capture=Mock()),workspace=SimpleNamespace(settings={'download_dir':str(self.root/'downloads')},save=AsyncMock()),context=lambda p:'ctx',selected_paths=lambda s,k:[str(self.root/'chosen')],shares=SimpleNamespace(session=lambda key:self.share_session))
   self.bridge.experience=Experience(self.bridge);self.dialog=DownloadDialog(self.bridge);self.addAsyncCleanup(self.dialog.close)
  def guard(self,stamp):
   if stamp!=self.stamp:raise CloudOperationError('account changed')
@@ -158,6 +229,32 @@ class DownloadPlans(unittest.IsolatedAsyncioTestCase):
   token=await self.prepare();self.stamp='B'
   with self.assertRaises(CloudOperationError):await self.dialog.action({'action':'download_commit','token':token})
   self.panel.start_download.assert_not_awaited()
+ async def test_large_share_without_direct_url_does_not_create_zero_byte_task(self):
+  token=await self.prepare();row=self.dialog.plans[token]
+  large=CloudFile('1','baidu','/docs/large-sample.bin',False,12_889_127_493)
+  row.update(items=[(large,self.root/'downloads')],bytes=large.size,share_key='share',
+             resolver=AsyncMock(side_effect=DownloadError('share_download','百度未提供直接下载地址')))
+  with self.assertRaisesRegex(CloudOperationError,'直接下载地址'):
+   await self.dialog.action({'action':'download_commit','token':token})
+  self.assertEqual(row['state'],'ready')
+  self.panel.start_download.assert_not_awaited()
+  self.assertFalse((self.root/'downloads').exists())
+ async def test_large_share_unavailable_ticket_queues_own_drive_copy(self):
+  token=await self.prepare();row=self.dialog.plans[token]
+  large=CloudFile('1','baidu','/large-sample.bin',False,1_000_000_000)
+  own=CloudFile('500','baidu','/CloudDock 临时下载/下载-abc/large-sample.bin',False,large.size)
+  temp=SimpleNamespace(stage=AsyncMock(return_value=(own,'temp-key')),queued=Mock())
+  self.bridge.features.share_temp=temp
+  self.bridge.shares=SimpleNamespace(session=lambda key:{'used':False})
+  row.update(items=[(large,self.root/'downloads')],bytes=large.size,share_key='share',
+             resolver=AsyncMock(side_effect=DownloadError('share_ticket_unavailable','分享票据不可用')))
+  result=await self.dialog.action({'action':'download_commit','token':token})
+  self.assertEqual(result['count'],1)
+  temp.stage.assert_awaited_once_with(row,large)
+  self.assertEqual(self.panel.start_download.await_args.args[0],own)
+  self.assertEqual(self.panel.start_download.await_args.kwargs['share_key'],'')
+  self.assertIsNone(self.panel.start_download.await_args.kwargs['resolver_override'])
+  temp.queued.assert_called_once()
  async def test_cancel_does_not_create_task_or_directory(self):
   token=await self.prepare();await self.dialog.action({'action':'download_cancel','token':token});self.assertNotIn(token,self.dialog.plans);self.panel.start_download.assert_not_awaited()
  async def test_nested_folder_preserves_relative_path(self):

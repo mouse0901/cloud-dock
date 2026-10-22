@@ -120,14 +120,18 @@ class CloudOperations:
             await asyncio.sleep(.5)
         raise CloudOperationError('改名或移动结果待核对，未重复提交。')
     async def copy(self,item,directory):
-        if self.provider!='baidu':raise CloudOperationError('夸克暂未接入云端复制。')
         stamp=self.stamp();self.guard(stamp)
         fresh=next((x for x in await self.list(item.parent) if x.id==item.id),None)
         if not fresh or (fresh.path,fresh.size,fresh.revision)!=(item.path,item.size,item.revision):raise CloudOperationError('源文件已变化，请刷新。')
         if item.is_dir and (directory==item.path or directory.startswith(item.path+'/')):raise CloudOperationError('不能复制到自身或子目录。')
         if any(x.name.casefold()==item.name.casefold() for x in await self.list(directory)):raise CloudOperationError('目标已有同名项目，未覆盖。')
         self.guard(stamp)
-        await self.call('filemanager',{'filelist':json.dumps([{'path':item.path,'dest':directory,'newname':item.name}]),'async':'0','ondup':'fail'},{'opera':'copy','onnest':'fail'})
+        if self.provider=='baidu':
+            await self.call('filemanager',{'filelist':json.dumps([{'path':item.path,'dest':directory,'newname':item.name}]),'async':'0','ondup':'fail'},{'opera':'copy','onnest':'fail'})
+        else:
+            target_id=self.api._directories.get(directory)
+            if not target_id:raise CloudOperationError('无法确认目标文件夹，请刷新后重试。')
+            await self.call('file/copy',{'action_type':1,'to_pdir_fid':target_id,'filelist':[item.id],'exclude_fids':[]})
         for _ in range(8):
             self.guard(stamp)
             found=next((x for x in await self.list(directory) if x.name==item.name and x.is_dir==item.is_dir and (item.is_dir or x.size==item.size)),None)
@@ -147,6 +151,15 @@ class CloudOperations:
                 result.append({'id':str(row['record_id']),'fid':str(row['fid']),'name':row.get('file_name',''),
                     'path':row.get('file_path',''),'parent_id':str(row.get('pdir_fid','')),'directory':row.get('file_type')==0,'size':row.get('size',0),'remaining':None,'deleted':row.get('move_recycle_at',0)})
         return result
+    async def trash_presence(self,values,field):
+        """Find records across pages; report whether the list was exhausted."""
+        found=set()
+        for page in range(20):
+            rows=await self.trash(page)
+            found.update(row[field] for row in rows if row.get(field) in values)
+            if found==values:return found,False
+            if len(rows)<50:return found,True
+        return found,False
     async def delete(self,items):
         if not items or len(items)>50:raise CloudOperationError('一次最多选择 50 项。')
         # Re-read authoritative IDs before path-addressed operations.
@@ -156,9 +169,11 @@ class CloudOperations:
             if not any(f.id==item.id and f.path==item.path and f.size==item.size and (not item.revision or f.revision==item.revision) for f in parents[item.parent]):raise CloudOperationError('文件已经变化，请刷新后再删除。')
         if self.provider=='baidu':await self.call('filemanager',{'filelist':json.dumps([x.path for x in items]),'async':'0'},{'opera':'delete'})
         else:await self.call('file/delete',{'action_type':1,'exclude_fids':[],'filelist':[x.id for x in items]})
+        wanted={x.id for x in items}
         for _ in range(10):
-            rows=await self.trash();ids={x['fid'] for x in rows}
-            if all(x.id in ids for x in items):return
+            found,exhausted=await self.trash_presence(wanted,'fid')
+            if found==wanted:return
+            if not exhausted:break
             await asyncio.sleep(.6)
         raise CloudOperationError('删除结果尚未在回收站确认，请刷新核对；未重复删除。')
     async def restore(self,row):
@@ -179,6 +194,8 @@ class CloudOperations:
         if self.provider=='baidu':await self.call('recycle/restore',{'fidlist':json.dumps([int(row['id'])])})
         else:await self.call('file/recycle/recover',{'select_mode':2,'record_list':[row['id']]})
         for _ in range(10):
-            if not any(x['id']==row['id'] for x in await self.trash()):return
+            found,exhausted=await self.trash_presence({row['id']},'id')
+            if row['id'] not in found and exhausted:return
+            if not found and not exhausted:break
             await asyncio.sleep(.6)
         raise CloudOperationError('还原结果尚未确认，请刷新回收站核对。')

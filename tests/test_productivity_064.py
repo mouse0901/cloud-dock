@@ -78,6 +78,13 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
   if s!=self.stamp:raise CloudOperationError('changed')
  async def action(self,action,**kw):return await self.tools.action({'action':action,'provider':'baidu','context':'context',**kw})
  async def plan(self,**kw):return await self.action('tools_plan',kind='rename',ids=['one'],name='two.txt',**kw)
+ async def test_quark_copy_can_be_planned_for_current_account(self):
+  item=CloudFile('one','quark','/one.txt',False,4,revision='v1')
+  self.panel.browser_rows=[item]
+  self.bridge.panels={'quark':self.panel};self.f.ops={'quark':self.ops}
+  result=await self.tools.action({'action':'tools_plan','provider':'quark','context':'context','kind':'copy','ids':['one'],'target':'/dest'})
+  self.assertEqual((result['kind'],result['source'],result['target']),('copy','/one.txt','/dest/one.txt'))
+  self.ops.copy.assert_not_awaited()
  async def test_plan_is_readonly_and_confirmation_single_use(self):
   p=await self.plan();self.ops.relocate.assert_not_awaited();r=await self.action('tools_commit',confirmation=p['confirmation']);await self.tools.tasks[r['token']]
   self.assertEqual(self.tools.jobs[r['token']]['status'],'completed');self.ops.relocate.assert_awaited_once()
@@ -152,8 +159,41 @@ class CopyTests(unittest.IsolatedAsyncioTestCase):
   ops.list=listing;ops.call=AsyncMock()
   with self.assertRaises(CloudOperationError):await ops.copy(item,'/dest')
   ops.call.assert_not_awaited()
- async def test_quark_copy_explicitly_unsupported(self):
-  with self.assertRaises(CloudOperationError):await CloudOperations('quark',SimpleNamespace()).copy(CloudFile('a','quark','/a'),'/dest')
+ async def test_quark_copy_uses_same_drive_endpoint_and_confirms_result(self):
+  api=SimpleNamespace(_directories={'/dest':'target-fid'});ops=CloudOperations('quark',api);ops.stamp=lambda:'A'
+  item=CloudFile('src','quark','/a.txt',False,4,revision='v');copied=CloudFile('new','quark','/dest/a.txt',False,4)
+  ops.list=AsyncMock(side_effect=[[item],[],[copied]]);ops.call=AsyncMock()
+  self.assertEqual(await ops.copy(item,'/dest'),copied)
+  ops.call.assert_awaited_once_with('file/copy',{'action_type':1,'to_pdir_fid':'target-fid','filelist':['src'],'exclude_fids':[]})
+ async def test_quark_copy_duplicate_never_submits(self):
+  api=SimpleNamespace(_directories={'/dest':'target-fid'});ops=CloudOperations('quark',api);ops.stamp=lambda:'A'
+  item=CloudFile('src','quark','/a.txt',False,4,revision='v')
+  ops.list=AsyncMock(side_effect=[[item],[CloudFile('other','quark','/dest/A.TXT',False,5)]])
+  ops.call=AsyncMock()
+  with self.assertRaisesRegex(CloudOperationError,'同名'):await ops.copy(item,'/dest')
+  ops.call.assert_not_awaited()
+ async def test_quark_copy_unknown_target_never_submits(self):
+  ops=CloudOperations('quark',SimpleNamespace(_directories={}));ops.stamp=lambda:'A'
+  item=CloudFile('src','quark','/a.txt',False,4,revision='v')
+  ops.list=AsyncMock(side_effect=[[item],[]]);ops.call=AsyncMock()
+  with self.assertRaisesRegex(CloudOperationError,'目标文件夹'):await ops.copy(item,'/dest')
+  ops.call.assert_not_awaited()
+ async def test_quark_copy_account_switch_never_submits(self):
+  api=SimpleNamespace(_directories={'/dest':'target-fid'});ops=CloudOperations('quark',api);stamp=['A'];ops.stamp=lambda:stamp[0]
+  item=CloudFile('src','quark','/a.txt',False,4,revision='v')
+  async def listing(path):
+   if path=='/dest':stamp[0]='B';return []
+   return [item]
+  ops.list=listing;ops.call=AsyncMock()
+  with self.assertRaisesRegex(CloudOperationError,'账号已切换'):await ops.copy(item,'/dest')
+  ops.call.assert_not_awaited()
+ async def test_quark_copy_unconfirmed_result_is_not_resubmitted(self):
+  api=SimpleNamespace(_directories={'/dest':'target-fid'});ops=CloudOperations('quark',api);ops.stamp=lambda:'A'
+  item=CloudFile('src','quark','/a.txt',False,4,revision='v')
+  ops.list=AsyncMock(side_effect=[[item]]+[[]]*9);ops.call=AsyncMock()
+  with patch('app.cloud_operations.asyncio.sleep',new_callable=AsyncMock),self.assertRaisesRegex(CloudOperationError,'未重复提交'):
+   await ops.copy(item,'/dest')
+  self.assertEqual(ops.call.await_count,1)
 
 class RecoveryTests(unittest.IsolatedAsyncioTestCase):
  async def test_transient_failure_retries_with_fresh_run(self):

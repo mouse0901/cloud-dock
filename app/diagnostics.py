@@ -1,10 +1,12 @@
 """Export an allowlist of counters, never raw logs, paths or exception messages."""
 from collections import Counter
-import datetime,platform
+import datetime,json,platform
+from pathlib import Path
 SAFE_STATES={'queued','paused','completed','cancelled','failed','downloading','uploading','preparing','verifying','committing','running','done'}
 def report(bridge):
     from app.operation_diagnostics import recent
-    result={'product':'Cloud Dock','version':'1.0.0','schema':1,'created_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    version=json.loads((Path(__file__).resolve().parents[1]/'version.json').read_text(encoding='utf-8'))['version']
+    result={'product':'Cloud Dock','version':version,'schema':1,'created_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),
             'runtime':{'python':platform.python_version(),'system':platform.system(),'release':platform.release(),'machine':platform.machine()},
             'workspace':{'initializing':bool(bridge.deferred),'initialization_failed':bool(bridge.initialization_error)},
             'accounts':{name:{'connected':bool(p.api.authenticated),'busy':bool(p.browser_busy)} for name,p in bridge.panels.items() if name in ('baidu','quark')},

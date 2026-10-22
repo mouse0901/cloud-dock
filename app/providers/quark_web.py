@@ -167,7 +167,8 @@ class QuarkWebApi:
         if self.diagnostic:
             # Only these non-sensitive metadata values may leave this adapter.
             allowed = {k: v for k, v in event.items() if k in {
-                "stage", "route", "http_status", "response_bytes", "parsed", "service_code", "outcome", "entry_count"}}
+                "stage", "route", "http_status", "response_bytes", "parsed", "service_code", "outcome", "entry_count",
+                "part_number", "oss_code"}}
             try:
                 self.diagnostic(allowed)
             except Exception:
@@ -343,7 +344,11 @@ class QuarkWebApi:
                 if (not isinstance(name, str) or not name or name in (".", "..") or "/" in name or "\\" in name
                         or any(ord(c) < 32 for c in name)):
                     raise ValueError()
-                if "pdir_fid" in row and _fid(row["pdir_fid"]) != parent_id:
+                # Share roots can expose the owner's original parent id even
+                # though sharepage/detail is requested with pdir_fid=0.
+                # Nested share directories and own-drive listings must still
+                # match the directory we actually requested.
+                if "pdir_fid" in row and _fid(row["pdir_fid"]) != parent_id and (share is None or parent_id != "0"):
                     raise ValueError()
                 directory = row.get("dir")
                 if type(directory) not in (bool, int) or directory not in (True, False, 0, 1):

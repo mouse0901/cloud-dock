@@ -212,6 +212,20 @@ class QuarkApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(calls), 3)
         self.assertFalse(any("save" in r.url.path for r in calls))
 
+    async def test_share_root_accepts_original_owner_parent_but_own_root_does_not(self):
+        root_file = row(parent="owners-original-folder", share_fid_token="file-token")
+        def handler(request):
+            if request.url.path.endswith("sharepage/token"):
+                return success({"stoken": "share-token"})
+            return success({"list": [root_file]})
+        api = await self.logged_api(handler)
+        share = await api.acquire_share("https://pan.quark.cn/s/abc123def456")
+        files = await api.list_share(share)
+        self.assertEqual(len(files), 1)
+        self.assertEqual(share.file_tokens[files[0].id], "file-token")
+        with self.assertRaises(QuarkApiError):
+            await api.list_files()
+
     async def test_download_rejects_wrong_file_size_and_unsafe_host(self):
         for override in ({"fid": "other"}, {"size": 5}, {"file_name": "other.bin"},
                          {"download_url": "https://evil.invalid/file"}):
